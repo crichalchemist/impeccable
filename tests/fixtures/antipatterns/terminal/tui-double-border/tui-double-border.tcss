@@ -1,0 +1,2 @@
+#main { border: double $accent; } /* flag */
+#side { border: round $accent; } /* pass */

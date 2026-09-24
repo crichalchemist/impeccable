@@ -173,3 +173,10 @@ value now lists it, so the one golden that prints that WARNING moved.
 
 - `context-bad-platform`: the WARNING's valid-values sentence reads ``Valid values are `web`, `ios`, `android`, `adaptive` (cross-platform, ships both), or `terminal` (a TUI or rich CLI)`` and the fix clause says `native or terminal-based`. Nothing else in the output changed.
 - `seed-platform-invalid`: the rejection reads `concept-seed: --platform must be one of web, ios, android, terminal`. Exit code and everything else unchanged.
+
+
+## Recorded 2026-09-24: terminal source rules (spec PR 2)
+
+New cases `detect-terminal-*` (one directory scan per `tui-` rule with `--platform terminal`, the web-gate scan of the same tree, the single-file advisory downgrade, the invalid flag value, and the `detect-terminal-project` workspace with and without the flag) pin the eleven terminal rules and the platform gate. `detect-help` gained the `--platform` line. The auto-enumerated `detect-fixture-{json,text}-terminal` are new because `tests/fixtures/antipatterns/terminal/` now exists. The seven all-fixtures goldens did not change: the new tree's `.tsx` files are web-scannable, but none of their terse Ink snippets trips an existing web rule (no CSS-in-JS block, no HTML), so the corpus-wide walk produces byte-identical output; no web rule's output on an existing fixture changed.
+
+Two fixture-review fixes landed alongside the goldens: `tui-hardcoded-size`'s "two `Constraint::Length` calls on one line" case was silently dropped by the old line-based dedup (fixed in `crates/core/src/checks/terminal.rs`, `scan_terminal_hardcoded_size`, plus a new unit test), and the `tui-spinner-no-tty-guard` Go fixture's own comment (`// flag: no isatty anywhere in this directory`) contained the literal trigger word for `TTY_GUARD_RE`, poisoning the directory's project signals and silencing all three of that rule's fixtures; the comment was reworded, no rule change needed.

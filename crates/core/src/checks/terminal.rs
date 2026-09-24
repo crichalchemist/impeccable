@@ -473,8 +473,7 @@ fn scan_terminal_hardcoded_size(lines: &[&str], file_path: &str) -> Vec<Finding>
     let lengths: Vec<usize> = lines
         .iter()
         .enumerate()
-        .filter(|(_, l)| CONSTRAINT_LENGTH_RE.is_match(l))
-        .map(|(i, _)| i)
+        .flat_map(|(i, l)| CONSTRAINT_LENGTH_RE.find_iter(l).map(move |_| i))
         .collect();
     if lengths.len() >= 2 && !lines.iter().any(|l| CONSTRAINT_FLEX_RE.is_match(l)) {
         out.push(with_count(hit("tui-hardcoded-size", file_path, lines, lengths[0]), "lengthConstraints", lengths.len()));
@@ -856,6 +855,15 @@ mod tests {
         assert_eq!(f[0].extras.get("lengthConstraints"), Some(&Value::from(3u64)));
         let flexible = "Layout::vertical([\n    Constraint::Length(3),\n    Constraint::Min(0),\n    Constraint::Length(1),\n])\n";
         assert!(scan(flexible, Stack::Ratatui, Some(&ALL)).is_empty());
+    }
+
+    #[test]
+    fn two_length_constraints_on_one_line_still_count_as_two() {
+        let src = "fn rigid() -> Layout { Layout::vertical([Constraint::Length(3), Constraint::Length(10)]) }\n";
+        let f = scan(src, Stack::Ratatui, Some(&ALL));
+        assert_eq!(ids(&f), vec!["tui-hardcoded-size"]);
+        assert_eq!(f[0].line, 1.0);
+        assert_eq!(f[0].extras.get("lengthConstraints"), Some(&Value::from(2u64)));
     }
 
     #[test]

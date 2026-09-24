@@ -50,6 +50,25 @@ export default function cases() {
     { id: 'detect-framework-next-tailwind-json', verb: 'detect', args: ['--no-config', '--json', `<REPO>/tests/fixtures/antipatterns/framework-next-tailwind`], isolateHome: false },
     { id: 'detect-framework-next-modules-text', verb: 'detect', args: ['--no-config', `<REPO>/tests/fixtures/antipatterns/framework-next-modules`], isolateHome: false },
     { id: 'detect-framework-next-cssinjs-json', verb: 'detect', args: ['--no-config', '--json', `<REPO>/tests/fixtures/antipatterns/framework-next-cssinjs`], isolateHome: false },
+  );
+
+  // Terminal source rules (spec section 3). Each rule's directory is scanned
+  // with --platform terminal so its own files supply the project signals;
+  // the whole tree without the flag proves a web scan sees no tui- rule.
+  const TERMINAL = `<REPO>/tests/fixtures/antipatterns/terminal`;
+  const TERMINAL_RULES = fs.readdirSync(path.join(FIXTURES, 'terminal'), { withFileTypes: true })
+    .filter((e) => e.isDirectory()).map((e) => e.name).sort();
+  for (const rule of TERMINAL_RULES) {
+    out.push({ id: `detect-terminal-${rule.replace(/^tui-/, '')}`, verb: 'detect', args: ['--no-config', '--json', '--platform', 'terminal', `${TERMINAL}/${rule}`], isolateHome: false });
+  }
+  out.push(
+    { id: 'detect-terminal-gate-web', verb: 'detect', args: ['--no-config', '--json', TERMINAL], isolateHome: false },
+    { id: 'detect-terminal-text-all', verb: 'detect', args: ['--no-config', '--platform', 'terminal', TERMINAL], isolateHome: false },
+    { id: 'detect-terminal-single-file-advisory', verb: 'detect', args: ['--no-config', '--json', '--platform', 'terminal', `${TERMINAL}/tui-spinner-no-tty-guard/tui-spinner-no-tty-guard.py`], isolateHome: false },
+    { id: 'detect-terminal-platform-invalid', verb: 'detect', args: ['--no-config', '--platform', 'nope', TERMINAL], isolateHome: false },
+    { id: 'detect-terminal-product-json', verb: 'detect', workspace: 'detect-terminal-project', args: ['--no-config', '--json', 'src'] },
+    { id: 'detect-terminal-product-text', verb: 'detect', workspace: 'detect-terminal-project', args: ['--no-config', 'src'] },
+    { id: 'detect-terminal-product-flag-web', verb: 'detect', workspace: 'detect-terminal-project', args: ['--no-config', '--json', '--platform', 'web', 'src'] },
 
     // Flag surface and errors
     { id: 'detect-help', verb: 'detect', args: ['--help'] },
