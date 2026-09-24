@@ -1105,7 +1105,7 @@ pub fn extract_platform(product: Option<&str>) -> Option<String> {
     if value.is_empty() {
         return None;
     }
-    if matches!(value.as_str(), "web" | "ios" | "android" | "adaptive") {
+    if matches!(value.as_str(), "web" | "ios" | "android" | "adaptive" | "terminal") {
         return Some(value);
     }
     let tokens: Vec<&str> = value
@@ -1259,4 +1259,36 @@ pub fn has_visual_implementation(project_root: &str) -> bool {
     }
     let _ = is_dir;
     styled >= 3
+}
+
+#[cfg(test)]
+mod platform_tests {
+    use super::extract_platform;
+
+    fn product(value: &str) -> String {
+        format!("# P\n\n## Platform\n\n{}\n\n## Positioning\nx\n", value)
+    }
+
+    #[test]
+    fn terminal_is_a_recognized_platform() {
+        assert_eq!(extract_platform(Some(&product("terminal"))).as_deref(), Some("terminal"));
+        assert_eq!(extract_platform(Some(&product("Terminal"))).as_deref(), Some("terminal"));
+    }
+
+    #[test]
+    fn terminal_never_combines_into_adaptive() {
+        assert_eq!(extract_platform(Some(&product("terminal, web"))), None);
+        assert_eq!(extract_platform(Some(&product("ios, terminal"))), None);
+    }
+
+    #[test]
+    fn mobile_pair_still_resolves_to_adaptive() {
+        assert_eq!(extract_platform(Some(&product("ios, android"))).as_deref(), Some("adaptive"));
+    }
+
+    #[test]
+    fn tui_and_cli_are_not_aliases() {
+        assert_eq!(extract_platform(Some(&product("tui"))), None);
+        assert_eq!(extract_platform(Some(&product("cli"))), None);
+    }
 }

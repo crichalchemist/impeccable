@@ -164,3 +164,12 @@ installed. The binary's `CLI_VERSION` moves from `3.6.0` to `4.0.0` with the
 CLI 4.0.0 release; it is what the binary prints when run directly.
 
 - `cli-version`.
+
+
+## Recorded 2026-09-24: `terminal` platform value
+
+`terminal` joins the platform values. The boot WARNING for an unrecognized
+value now lists it, so the one golden that prints that WARNING moved.
+
+- `context-bad-platform`: the WARNING's valid-values sentence reads ``Valid values are `web`, `ios`, `android`, `adaptive` (cross-platform, ships both), or `terminal` (a TUI or rich CLI)`` and the fix clause says `native or terminal-based`. Nothing else in the output changed.
+- `seed-platform-invalid`: the rejection reads `concept-seed: --platform must be one of web, ios, android, terminal`. Exit code and everything else unchanged.
