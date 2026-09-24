@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use impeccable_core::checks::terminal::ProjectSignals;
 use impeccable_core::findings::Finding;
 use impeccable_core::js;
 use impeccable_detect::config::{
@@ -38,6 +39,23 @@ pub const ALLOWED_EXTS: &[&str] = &[
 pub const ACK_EXTS: &[&str] = &[
     ".tsx", ".jsx", ".html", ".htm", ".vue", ".svelte", ".astro", ".css", ".scss", ".sass", ".less",
 ];
+
+/// `ALLOWED_EXTS` plus the terminal source extensions, watched only when the
+/// project's platform is `terminal` (spec section 3, "Hook").
+pub const TERMINAL_ALLOWED_EXTS: &[&str] = &[
+    ".tsx", ".jsx", ".html", ".htm", ".vue", ".svelte", ".astro", ".css", ".scss", ".sass",
+    ".less", ".ts", ".js", ".rs", ".go", ".py", ".tcss",
+];
+
+/// The extension gate for a resolved platform. Web (and every native value,
+/// which the native skip has already handled) keeps `ALLOWED_EXTS`.
+pub fn allowed_exts(platform: Option<&str>) -> &'static [&'static str] {
+    if platform == Some("terminal") {
+        TERMINAL_ALLOWED_EXTS
+    } else {
+        ALLOWED_EXTS
+    }
+}
 
 const WS: &str = impeccable_core::js::WS;
 
@@ -1612,6 +1630,8 @@ pub fn should_emit_ack_for_file(file_path: &str, config: &HookConfig) -> bool {
 #[derive(Default, Clone)]
 pub struct HookScanOptions {
     pub design_system: Option<Rc<DesignSystem>>,
+    pub platform: Option<String>,
+    pub signals: Option<Rc<ProjectSignals>>,
 }
 
 impl HookScanOptions {
@@ -1628,8 +1648,8 @@ impl HookScanOptions {
             viewport: None,
             profile: None,
             rule_pack: None,
-            platform: None,
-            signals: None,
+            platform: self.platform.clone(),
+            signals: self.signals.clone(),
         }
     }
 }
@@ -1641,6 +1661,8 @@ pub fn design_system_options(config: &HookConfig, project_cwd: &str) -> HookScan
     }
     HookScanOptions {
         design_system: load_design_system_for_cwd(project_cwd).map(Rc::new),
+        platform: None,
+        signals: None,
     }
 }
 
@@ -1683,8 +1705,8 @@ pub fn detector_detect_text(
         design_system: scan.design_system.as_deref(),
         inline_ignores: true,
         rule_pack: None,
-        platform: None,
-        signals: None,
+        platform: scan.platform.as_deref(),
+        signals: scan.signals.as_deref(),
     };
     detect_text(content, file_path, &opts)
 }
@@ -2473,4 +2495,21 @@ pub fn js_slice(s: &str, start: usize, end: usize) -> String {
 /// the file once the accepted variant is permanent.
 pub fn has_live_preview_markers(content: &str) -> bool {
     content.contains("data-impeccable-variants=") || content.contains("impeccable-carbonize-start")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn terminal_platform_keeps_hook_active() {
+        // Spec: `terminal` is not a native skip, and it admits terminal source.
+        assert!(!is_native_platform(Some("terminal")));
+        assert!(allowed_exts(Some("terminal")).contains(&".rs"));
+        assert!(allowed_exts(Some("terminal")).contains(&".tcss"));
+        assert!(allowed_exts(Some("terminal")).contains(&".tsx"), "web extensions stay watched");
+        assert_eq!(allowed_exts(None), ALLOWED_EXTS);
+        assert_eq!(allowed_exts(Some("web")), ALLOWED_EXTS);
+        assert!(!allowed_exts(Some("web")).contains(&".rs"));
+    }
 }

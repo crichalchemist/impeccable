@@ -2,15 +2,17 @@
 //! `runHook` / `runStopHook`: the PostToolUse per-edit pass and the Stop deep
 //! pass. Always exits 0; stdout is one JSON document or nothing.
 
+use impeccable_core::checks::terminal::ProjectSignals;
 use impeccable_core::findings::Finding;
 use impeccable_core::js;
 use serde_json::{Map, Value};
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use crate::hook_lib::*;
 use crate::stop_baseline;
 use crate::util::{
-    exists, iso_now, jsp, node_read_error, now_ms, str_field, truthy_value, utf16_len,
+    exists, iso_now, jsp, node_read_error, now_ms, safe_read, str_field, truthy_value, utf16_len,
 };
 
 /// JS `runHook` / `runStopHook` result: `{ exitCode: 0, stdout, audit }`.
@@ -211,7 +213,7 @@ pub fn run_hook(rt: &Runtime, stdin: &str) -> RunResult {
                     .unwrap_or_else(|| ext.clone()),
             ),
         );
-        if !ALLOWED_EXTS.contains(&ext.as_str()) && configured.is_none() {
+        if !allowed_exts(platform.as_deref()).contains(&ext.as_str()) && configured.is_none() {
             last_skip = "extension";
             continue;
         }
@@ -306,6 +308,7 @@ pub fn run_hook(rt: &Runtime, stdin: &str) -> RunResult {
         let scan = scans.entry(file_path.clone()).or_insert_with(|| {
             design_system_options_for_file(rt, &config, &project_cwd, file_path)
         });
+        scan.platform = platform.clone();
         let mut detector_threw = false;
         let findings: Vec<Finding> = if use_html_engine {
             match detector_detect_html(rt, file_path, scan) {
@@ -708,6 +711,20 @@ pub fn run_stop_hook(rt: &Runtime, stdin: &str) -> RunResult {
             ],
         );
     }
+    // Spec section 3, "Hook": the deep pass runs the terminal rules with
+    // project signals, collected the same way `detect` collects them. One
+    // walk per hook run, not per touched file.
+    let terminal_signals: Option<Rc<ProjectSignals>> = if platform.as_deref() == Some("terminal") {
+        let mut signals = ProjectSignals::default();
+        for f in impeccable_detect::file_system::walk_dir_reporting_for(&project_cwd, Some("terminal"), &mut |_, _| {}) {
+            if let Some(text) = safe_read(&f) {
+                signals.absorb(&text);
+            }
+        }
+        Some(Rc::new(signals))
+    } else {
+        None
+    };
     let mut scans = HashMap::new();
 
     let mut fresh_groups: Vec<Group> = Vec::new();
@@ -728,7 +745,7 @@ pub fn run_stop_hook(rt: &Runtime, stdin: &str) -> RunResult {
         }
         let ext = js::to_lower_case(&jsp::extname(file_path));
         let configured = match_configured_extension(file_path, &config.extensions);
-        if !ALLOWED_EXTS.contains(&ext.as_str()) && configured.is_none() {
+        if !allowed_exts(platform.as_deref()).contains(&ext.as_str()) && configured.is_none() {
             continue;
         }
         let rel = relativize(rt, file_path, &project_cwd);
@@ -755,6 +772,8 @@ pub fn run_stop_hook(rt: &Runtime, stdin: &str) -> RunResult {
         let scan = scans.entry(file_path.clone()).or_insert_with(|| {
             design_system_options_for_file(rt, &config, &project_cwd, file_path)
         });
+        scan.platform = platform.clone();
+        scan.signals = terminal_signals.clone();
         // JS: a detector failure tells us nothing about the file. Leave
         // whatever was remembered alone rather than recording an empty scan
         // as truth. (detectText cannot throw here: the Rust engine returns
