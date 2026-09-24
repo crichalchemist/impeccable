@@ -1631,6 +1631,8 @@ impl HookScanOptions {
             viewport: None,
             profile: None,
             rule_pack: None,
+            platform: None,
+            signals: None,
         }
     }
 }
@@ -1684,6 +1686,8 @@ pub fn detector_detect_text(
         design_system: scan.design_system.as_deref(),
         inline_ignores: true,
         rule_pack: None,
+        platform: None,
+        signals: None,
     };
     detect_text(content, file_path, &opts)
 }

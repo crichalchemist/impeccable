@@ -5,6 +5,7 @@
 
 use std::rc::Rc;
 
+use impeccable_core::checks::terminal::ProjectSignals;
 use impeccable_core::findings::Finding;
 use impeccable_core::rule_pack::RulePack;
 
@@ -27,6 +28,12 @@ pub struct ScanOptions {
     /// to the text engine and on to the HTML engine. `None` in the `impeccable`
     /// binary, which ships the built-in rules only.
     pub rule_pack: Option<&'static dyn RulePack>,
+    /// The resolved platform (`--platform`, else the binary's PRODUCT.md
+    /// resolver); `None` is web. Threaded to `TextOptions::platform`.
+    pub platform: Option<String>,
+    /// Project signals collected over a directory target on a terminal
+    /// project; `None` for single-file targets and for web projects.
+    pub signals: Option<Rc<ProjectSignals>>,
 }
 
 /// An error an engine raises; `detectCli` reports it the way the JS surfaces
@@ -89,6 +96,10 @@ pub trait SharedBrowser {
 pub struct Engines<'a> {
     pub html: &'a dyn HtmlEngine,
     pub url: Option<&'a dyn UrlEngine>,
+    /// Resolves the project's platform for a cwd. The binary reads PRODUCT.md
+    /// through `impeccable_context`; `detect` never depends on that crate, so
+    /// the lookup arrives here. `None` (no resolver, or no PRODUCT.md) is web.
+    pub platform: Option<&'a dyn Fn(&str) -> Option<String>>,
 }
 
 /// Fallback for a build that does not link crates/html (the `cli` binary

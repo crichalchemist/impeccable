@@ -111,6 +111,8 @@ pub fn detect_text_json(content: &str, file_path: &str, options_json: &str) -> S
             design_system: options.design_system.as_ref(),
             inline_ignores: options.inline_ignores,
             rule_pack: crate::installed_rule_pack(),
+            platform: None,
+            signals: None,
         },
     );
     findings_json(&findings)

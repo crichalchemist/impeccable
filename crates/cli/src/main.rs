@@ -121,6 +121,7 @@ fn engines() -> impeccable_detect::Engines<'static> {
     impeccable_detect::Engines {
         html: &HTML,
         url: Some(url_engine()),
+        platform: None,
     }
 }
 

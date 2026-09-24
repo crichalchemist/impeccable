@@ -299,6 +299,8 @@ impl<'a> Ctx<'a> {
                 design_system: options.design_system.as_deref(),
                 inline_ignores: options.inline_ignores,
                 rule_pack: options.rule_pack,
+                platform: options.platform.as_deref(),
+                signals: options.signals.as_deref(),
             },
         ))
     }
@@ -327,6 +329,8 @@ impl<'a> Ctx<'a> {
                 design_system: opts.design_system.as_deref(),
                 inline_ignores: opts.inline_ignores,
                 rule_pack: opts.rule_pack,
+                platform: opts.platform.as_deref(),
+                signals: opts.signals.as_deref(),
             },
         ))
     }
@@ -510,6 +514,8 @@ fn detect_cli(args_in: &[String], io: &mut Io, engines: &Engines) -> Result<i32,
         // The `impeccable` binary installs no rule pack; a library caller that
         // does sets this before handing the options to an engine.
         rule_pack: None,
+        platform: None,
+        signals: None,
     };
     let targets: Vec<String> = expand_joined_url_targets(
         args.iter()
