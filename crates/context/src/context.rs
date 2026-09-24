@@ -1122,6 +1122,21 @@ pub fn extract_platform(product: Option<&str>) -> Option<String> {
     None
 }
 
+/// JS: resolveProjectPlatform(cwd): `extractPlatform(loadContext(cwd).product)`.
+/// The one PRODUCT.md platform lookup the hook and `impeccable detect`
+/// share. Only the platform is observable, so it skips loadContext's brief
+/// and visual-implementation work. `None` means no PRODUCT.md or no
+/// `## Platform`, which every caller treats as web.
+pub fn resolve_project_platform(cwd: &str, env: &Env) -> Option<String> {
+    let options = crate::target_args::TargetOptions::default();
+    let resolved = resolve_context(cwd, &options, env);
+    let product = resolved
+        .product_path
+        .as_deref()
+        .and_then(|p| std::fs::read_to_string(p).ok());
+    extract_platform(product.as_deref())
+}
+
 // ─── hasVisualImplementation ───────────────────────────────────────────────
 
 static RE_BLOCK_COMMENT: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?s)/\*.*?\*/").unwrap());

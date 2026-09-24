@@ -337,10 +337,7 @@ pub fn resolve_cache_cwd(rt: &Runtime, primary_file: Option<&str>, session_cwd: 
 /// resolution and skips loadContext's surface-brief and visual-implementation
 /// work.
 pub fn resolve_project_platform(rt: &Runtime, cwd: &str) -> Option<String> {
-    let options = impeccable_context::target_args::TargetOptions::default();
-    let resolved = impeccable_context::context::resolve_context(cwd, &options, &rt.env);
-    let product = resolved.product_path.as_deref().and_then(safe_read);
-    impeccable_context::context::extract_platform(product.as_deref())
+    impeccable_context::context::resolve_project_platform(cwd, &rt.env)
 }
 
 /// JS: isNativePlatform(platform)
