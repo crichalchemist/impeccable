@@ -364,5 +364,71 @@
     "name": "Image hover transform",
     "category": "slop",
     "description": "Scaling or rotating an image on hover is a recurring generated-UI signature. Let imagery sit still, or use a subtler, purposeful interaction."
+  },
+  {
+    "id": "tui-figlet-banner",
+    "name": "FIGlet banner",
+    "category": "slop",
+    "description": "A block-letter banner (figlet, pyfiglet, ink-big-text, cfonts) or hand-drawn block glyphs at the top of a terminal UI is the most recognizable generated-CLI tell. Print the name once in plain text and spend the rows on the task."
+  },
+  {
+    "id": "tui-gradient-title",
+    "name": "Gradient title",
+    "category": "slop",
+    "description": "A gradient across a title (gradient-string, ink-gradient, rich_gradient, lipgloss.Blend) is decoration the terminal cannot render consistently. Use one accent color."
+  },
+  {
+    "id": "tui-blink-attribute",
+    "name": "Blinking text",
+    "category": "slop",
+    "description": "The blink attribute (SLOW_BLINK, [blink], text-style: blink, ESC[5m) is unreadable, ignored by many emulators, and hostile to attention. Show state with color or a static marker."
+  },
+  {
+    "id": "tui-emoji-density",
+    "name": "Emoji as UI vocabulary",
+    "category": "slop",
+    "description": "Emoji used as status glyphs and bullets render at unpredictable widths and break column alignment. Use ASCII or a single-width symbol set with a plain fallback."
+  },
+  {
+    "id": "tui-double-border",
+    "name": "Double-line border",
+    "category": "slop",
+    "description": "Double-line box borders draw the eye to the frame instead of the content and stack badly when panels nest. Use a plain or rounded single border, and drop borders on inner panels."
+  },
+  {
+    "id": "tui-hardcoded-rgb-no-adapt",
+    "name": "Hardcoded truecolor without adaptation",
+    "category": "slop",
+    "description": "A literal RGB or hex color with no light/dark or NO_COLOR adaptation assumes one terminal theme. Use the 16 ANSI colors or an adaptive color helper."
+  },
+  {
+    "id": "tui-spinner-no-tty-guard",
+    "name": "Spinner without a TTY guard",
+    "category": "quality",
+    "description": "A spinner that runs when stdout is not a TTY floods logs and CI output with frames. Check isatty (or a CI / --no-progress flag) and print a static line instead."
+  },
+  {
+    "id": "tui-hardcoded-size",
+    "name": "Hardcoded terminal size",
+    "category": "quality",
+    "description": "Fixed 80x24 assumptions and all-Length layouts do not resize with the terminal. Read the size at render time and use flexible constraints."
+  },
+  {
+    "id": "tui-grapheme-unsafe-truncate",
+    "name": "Byte or char truncation before an ellipsis",
+    "category": "quality",
+    "description": "Slicing a string by bytes or chars before an ellipsis splits wide characters and grapheme clusters. Truncate by display width (unicode-width, runewidth, string-width, wcwidth)."
+  },
+  {
+    "id": "tui-nerd-glyph-no-fallback",
+    "name": "Nerd Font glyph without a fallback",
+    "category": "quality",
+    "description": "Private-use glyphs render as boxes without a patched font. Offer an ASCII or plain icon set behind an option."
+  },
+  {
+    "id": "tui-print-in-loop",
+    "name": "Console output inside a TUI render loop",
+    "category": "quality",
+    "description": "print or console.log inside a running full-screen app corrupts the frame. Log to a file or use the framework's log or patchConsole facility."
   }
 ]
