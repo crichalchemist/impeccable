@@ -111,4 +111,29 @@ describe('skill reference authoring contracts', () => {
     assert.match(terminal, /tmux capture-pane/);
     assert.doesNotMatch(terminal, /—/, 'em dash');
   });
+
+  it('keeps the audit report skeleton identical across the web, native, and terminal variants', () => {
+    // The verdict heading names what each variant judges (implementation
+    // integrity on the web, platform conformance elsewhere); every other
+    // heading must match exactly.
+    const skeleton = (name) => {
+      const text = readFileSync(join(ROOT, `skill/reference/${name}`), 'utf-8').replace(/\r\n?/g, '\n');
+      return text
+        .split('\n')
+        .filter((l) => /^#{2,3} /.test(l) && !/^### \d\./.test(l))
+        .map((l) => (/^### .* Verdict$/.test(l) ? '### <verdict>' : l));
+    };
+    const web = skeleton('audit.md');
+    assert.deepEqual(skeleton('audit.native.md'), web);
+    assert.deepEqual(skeleton('audit.terminal.md'), web);
+    const terminal = readFileSync(join(ROOT, 'skill/reference/audit.terminal.md'), 'utf-8');
+    assert.equal((terminal.match(/^### \d\. /gm) || []).length, 5, 'five scored dimensions');
+    assert.match(terminal, /\*\*\?\?\/20\*\*/);
+    assert.match(terminal, /NO_COLOR/);
+    const adapt = readFileSync(join(ROOT, 'skill/reference/adapt.terminal.md'), 'utf-8');
+    assert.match(adapt, /under 60 columns/);
+    assert.match(adapt, /120 columns and above/);
+    assert.match(adapt, /16 colors/);
+    assert.match(adapt, /truecolor/);
+  });
 });
