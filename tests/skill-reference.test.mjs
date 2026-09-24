@@ -136,4 +136,28 @@ describe('skill reference authoring contracts', () => {
     assert.match(adapt, /16 colors/);
     assert.match(adapt, /truecolor/);
   });
+
+  it('routes terminal projects to the terminal references and keeps detect available to them', () => {
+    const skill = readFileSync(join(ROOT, 'skill/SKILL.src.md'), 'utf-8').replace(/\r\n?/g, '\n');
+    const routing = readFileSync(join(ROOT, 'skill/reference/routing.md'), 'utf-8').replace(/\r\n?/g, '\n');
+    const init = readFileSync(join(ROOT, 'skill/reference/init.md'), 'utf-8').replace(/\r\n?/g, '\n');
+    const audit = readFileSync(join(ROOT, 'skill/reference/audit.md'), 'utf-8');
+    const adapt = readFileSync(join(ROOT, 'skill/reference/adapt.md'), 'utf-8');
+
+    const auditRow = skill.split('\n').find((l) => l.startsWith('| `audit [target]`')) ?? '';
+    const adaptRow = skill.split('\n').find((l) => l.startsWith('| `adapt [target]`')) ?? '';
+    assert.match(auditRow, /terminal: \[reference\/audit\.terminal\.md\]\(reference\/audit\.terminal\.md\)/);
+    assert.match(adaptRow, /terminal: \[reference\/adapt\.terminal\.md\]\(reference\/adapt\.terminal\.md\)/);
+    assert.match(skill, /platform variant when the Commands table lists one/);
+    assert.match(skill, /`ios`, `android`, `adaptive`, or `terminal`/);
+    assert.match(skill, /Terminal surfaces usually resolve to Operate or Read/);
+    assert.match(skill.split('\n')[2], /terminal UIs \(TUIs\)/);
+
+    assert.match(routing, /`live` and `generate` are web-only/);
+    assert.match(routing, /`terminal` projects keep `impeccable detect`/);
+    assert.match(init, /`web`, `ios`, `android`, `adaptive`, or `terminal`/);
+    assert.match(init, /\[terminal\.md\]\(terminal\.md\)/);
+    assert.match(audit, /Terminal projects \(`terminal`\) route to \[audit\.terminal\.md\]/);
+    assert.match(adapt, /Terminal projects \(`terminal`\) route to \[adapt\.terminal\.md\]/);
+  });
 });
