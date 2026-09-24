@@ -552,6 +552,7 @@ fn load_native_platform_references(platform: Option<&str>, provider: &Provider) 
         Some("adaptive") => vec!["ios", "android"],
         Some("ios") => vec!["ios"],
         Some("android") => vec!["android"],
+        Some("terminal") => vec!["terminal"],
         _ => vec![],
     };
     names
@@ -678,7 +679,7 @@ pub fn run(args: &[String], io: &mut Io) -> i32 {
     if ctx.platform.is_none() {
         if let Some(raw) = extract_section_value(ctx.product.as_deref(), "Platform") {
             if !raw.is_empty() {
-                parts.push(format!("WARNING: PRODUCT.md's `## Platform` value `{}` is not recognized; treating the project as `web`. Valid values are `web`, `ios`, `android`, or `adaptive` (cross-platform, ships both). If this project is native, fix the field (name the design language the app renders, not the toolchain) and surface it to the user.", raw));
+                parts.push(format!("WARNING: PRODUCT.md's `## Platform` value `{}` is not recognized; treating the project as `web`. Valid values are `web`, `ios`, `android`, `adaptive` (cross-platform, ships both), or `terminal` (a TUI or rich CLI). If this project is native or terminal-based, fix the field (name the design language the app renders, not the toolchain) and surface it to the user.", raw));
             }
         }
     }
