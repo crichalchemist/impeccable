@@ -172,3 +172,4 @@ CLI 4.0.0 release; it is what the binary prints when run directly.
 value now lists it, so the one golden that prints that WARNING moved.
 
 - `context-bad-platform`: the WARNING's valid-values sentence reads ``Valid values are `web`, `ios`, `android`, `adaptive` (cross-platform, ships both), or `terminal` (a TUI or rich CLI)`` and the fix clause says `native or terminal-based`. Nothing else in the output changed.
+- `seed-platform-invalid`: the rejection reads `concept-seed: --platform must be one of web, ios, android, terminal`. Exit code and everything else unchanged.

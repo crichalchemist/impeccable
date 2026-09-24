@@ -660,6 +660,7 @@ const cases = [
   { id: 'seed-mode-invalid', verb: 'concept-seed', workspace: 'ctx-product-only', args: ['--scope', 'direction', '--from', 'k1', '--mode', 'sell'], env: seedEnv() },
   { id: 'seed-grain-invalid', verb: 'concept-seed', workspace: 'ctx-product-only', args: ['--scope', 'surface', '--from', 'k1', '--grain', 'pixel'], env: seedEnv() },
   { id: 'seed-platform-invalid', verb: 'concept-seed', workspace: 'ctx-product-only', args: ['--scope', 'surface', '--from', 'k1', '--platform', 'tv'], env: seedEnv() },
+  { id: 'seed-platform-terminal', verb: 'concept-seed', workspace: 'ctx-product-only', args: ['--scope', 'surface', '--from', 'k1', '--platform', 'terminal'], env: seedEnv() },
   { id: 'seed-candidate-count-invalid', verb: 'concept-seed', workspace: 'ctx-product-only', args: ['--scope', 'direction', '--from', 'k1', '--candidate-count', '9'], env: seedEnv() },
   { id: 'seed-no-product-gate', verb: 'concept-seed', workspace: 'ctx-visual-only', args: ['--scope', 'direction', '--from', 'k1'], env: seedEnv() },
   { id: 'seed-direction-local', verb: 'concept-seed', workspace: 'ctx-product-only', args: ['--scope', 'direction', '--mode', 'persuade', '--from', 'oracle-key-1'], env: seedEnv() },

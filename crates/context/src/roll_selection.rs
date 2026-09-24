@@ -6,7 +6,7 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
 pub const COMPOSITION_GRAINS: [&str; 4] = ["product", "flow", "view", "region"];
-pub const COMPOSITION_PLATFORMS: [&str; 3] = ["web", "ios", "android"];
+pub const COMPOSITION_PLATFORMS: [&str; 4] = ["web", "ios", "android", "terminal"];
 
 fn s<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
     v.get(key).and_then(|x| x.as_str())
