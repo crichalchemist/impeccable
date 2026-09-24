@@ -421,6 +421,202 @@ fn scan_terminal_hardcoded_rgb(
         .collect()
 }
 
+// ─── tui-spinner-no-tty-guard ───────────────────────────────────────────────
+re!(SPINNER_RE, r"ink-spinner|\bora\(|rich\.spinner|bubbles/spinner|briandowns/spinner");
+
+fn scan_terminal_spinner(lines: &[&str], file_path: &str, signals: Option<&ProjectSignals>) -> Vec<Finding> {
+    if matches!(signals, Some(s) if s.has_tty_guard) {
+        return Vec::new();
+    }
+    lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| SPINNER_RE.is_match(l))
+        .map(|(i, _)| {
+            let f = hit("tui-spinner-no-tty-guard", file_path, lines, i);
+            if signals.is_none() { with_note(f, SIGNALS_NOTE) } else { f }
+        })
+        .collect()
+}
+
+// ─── tui-hardcoded-size ─────────────────────────────────────────────────────
+re!(
+    RECT_LITERAL_RE,
+    r"Rect::new\([ \t]*\d+[ \t]*,[ \t]*\d+[ \t]*,[ \t]*\d+[ \t]*,[ \t]*\d+[ \t]*\)"
+);
+re!(SIZE_80_RE, r"(?i)\b(?:width|cols|columns)[ \t]*[:=][ \t]*80\b");
+re!(SIZE_24_RE, r"(?i)\b(?:height|rows|lines)[ \t]*[:=][ \t]*24\b");
+re!(SIZE_CALL_RE, r"\.Width\(80\)|width=\{80\}|size=\(80,[ \t]*24\)");
+re!(CONSTRAINT_LENGTH_RE, r"Constraint::Length\(");
+re!(CONSTRAINT_FLEX_RE, r"Constraint::(?:Min|Max|Percentage|Ratio|Fill)\(");
+
+/// Test code pins sizes on purpose (spec: "outside paths containing test").
+/// Only the file name and its parent directory are consulted, so a fixture
+/// tree under `tests/fixtures/` still scans (planning ruling 7).
+fn in_test_path(file_path: &str) -> bool {
+    let lower = file_path.to_lowercase().replace('\\', "/");
+    lower.rsplit('/').take(2).any(|seg| seg.contains("test"))
+}
+
+fn scan_terminal_hardcoded_size(lines: &[&str], file_path: &str) -> Vec<Finding> {
+    if in_test_path(file_path) {
+        return Vec::new();
+    }
+    let mut out: Vec<Finding> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| {
+            RECT_LITERAL_RE.is_match(l) || SIZE_80_RE.is_match(l) || SIZE_24_RE.is_match(l) || SIZE_CALL_RE.is_match(l)
+        })
+        .map(|(i, _)| hit("tui-hardcoded-size", file_path, lines, i))
+        .collect();
+    let lengths: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| CONSTRAINT_LENGTH_RE.is_match(l))
+        .map(|(i, _)| i)
+        .collect();
+    if lengths.len() >= 2 && !lines.iter().any(|l| CONSTRAINT_FLEX_RE.is_match(l)) {
+        out.push(with_count(hit("tui-hardcoded-size", file_path, lines, lengths[0]), "lengthConstraints", lengths.len()));
+    }
+    out.sort_by(|a, b| a.line.partial_cmp(&b.line).unwrap_or(std::cmp::Ordering::Equal));
+    out
+}
+
+// ─── tui-grapheme-unsafe-truncate ───────────────────────────────────────────
+re!(RUST_TRUNC_RE, r"&\w+\[\.\.[ \t]*\w+\]|\.chars\(\)\.take\(");
+re!(GO_TRUNC_RE, r"\b\w+\[:\w+\]");
+re!(JS_TRUNC_RE, r"\.slice\(0,|\.substring\(0,");
+re!(ELLIPSIS_RE, r"\.\.\.|…|\\u\{2026\}|\\u2026");
+
+/// Python is not matched: every `.py` file this module sees imports rich or
+/// textual (framework detection), and both measure width for the caller.
+fn scan_terminal_grapheme_truncate(
+    lines: &[&str],
+    file_path: &str,
+    stack: Stack,
+    signals: Option<&ProjectSignals>,
+) -> Vec<Finding> {
+    if matches!(signals, Some(s) if s.has_width_lib) {
+        return Vec::new();
+    }
+    let re: &Regex = match stack {
+        Stack::Ratatui => &RUST_TRUNC_RE,
+        Stack::Charm => &GO_TRUNC_RE,
+        Stack::Ink => &JS_TRUNC_RE,
+        Stack::Textual | Stack::TextualCss => return Vec::new(),
+    };
+    let n = lines.len();
+    lines
+        .iter()
+        .enumerate()
+        .filter(|(i, l)| re.is_match(l) && (*i..(*i + 3).min(n)).any(|k| ELLIPSIS_RE.is_match(lines[k])))
+        .map(|(i, _)| {
+            let f = hit("tui-grapheme-unsafe-truncate", file_path, lines, i);
+            if signals.is_none() { with_note(f, SIGNALS_NOTE) } else { f }
+        })
+        .collect()
+}
+
+// ─── tui-nerd-glyph-no-fallback ─────────────────────────────────────────────
+fn is_private_use(c: char) -> bool {
+    matches!(c, '\u{E000}'..='\u{F8FF}' | '\u{F0000}'..='\u{FFFFD}')
+}
+
+fn scan_terminal_nerd_glyph(lines: &[&str], file_path: &str, signals: Option<&ProjectSignals>) -> Vec<Finding> {
+    if matches!(signals, Some(s) if s.has_icon_toggle) {
+        return Vec::new();
+    }
+    let mut count = 0usize;
+    let mut first: Option<usize> = None;
+    for (i, l) in lines.iter().enumerate() {
+        let here = l.chars().filter(|c| is_private_use(*c)).count();
+        if here > 0 {
+            count += here;
+            first.get_or_insert(i);
+        }
+    }
+    match first {
+        Some(i) => {
+            let f = with_count(hit("tui-nerd-glyph-no-fallback", file_path, lines, i), "glyphCount", count);
+            vec![if signals.is_none() { with_note(f, SIGNALS_NOTE) } else { f }]
+        }
+        None => Vec::new(),
+    }
+}
+
+// ─── tui-print-in-loop ──────────────────────────────────────────────────────
+re!(
+    TEXTUAL_CLASS_RE,
+    r"^[ \t]*class[ \t]+\w+\([^)]*\b(?:App|Widget|Screen|ModalScreen|Static|Container)\b"
+);
+re!(PY_DEF_RE, r"^[ \t]*(?:async[ \t]+)?def[ \t]+\w+");
+re!(PY_PRINT_RE, r"(?:^|[^.\w])print\(");
+re!(INK_CONSOLE_LOG_RE, r"\bconsole\.log\(");
+
+fn indent_of(line: &str) -> usize {
+    line.chars().take_while(|c| *c == ' ' || *c == '\t').count()
+}
+
+fn scan_terminal_print_in_loop(lines: &[&str], file_path: &str, stack: Stack) -> Vec<Finding> {
+    match stack {
+        Stack::Ink => {
+            if lines.iter().any(|l| l.contains("patchConsole") || l.contains("patch-console")) {
+                return Vec::new();
+            }
+            lines
+                .iter()
+                .enumerate()
+                .filter(|(_, l)| INK_CONSOLE_LOG_RE.is_match(l))
+                .map(|(i, _)| hit("tui-print-in-loop", file_path, lines, i))
+                .collect()
+        }
+        Stack::Textual => {
+            let n = lines.len();
+            let mut out = Vec::new();
+            let mut i = 0;
+            while i < n {
+                if !TEXTUAL_CLASS_RE.is_match(lines[i]) {
+                    i += 1;
+                    continue;
+                }
+                let class_indent = indent_of(lines[i]);
+                i += 1;
+                let mut method_indent: Option<usize> = None;
+                let mut in_worker = false;
+                while i < n {
+                    let l = lines[i];
+                    let blank = l.trim().is_empty();
+                    if !blank && indent_of(l) <= class_indent {
+                        break;
+                    }
+                    if PY_DEF_RE.is_match(l) {
+                        method_indent = Some(indent_of(l));
+                        // Decorators sit directly above the def; `@work` marks a worker.
+                        in_worker = false;
+                        let mut k = i;
+                        while k > 0 && lines[k - 1].trim_start().starts_with('@') {
+                            k -= 1;
+                            if lines[k].contains("work") {
+                                in_worker = true;
+                            }
+                        }
+                    } else if !blank
+                        && !in_worker
+                        && method_indent.map(|m| indent_of(l) > m).unwrap_or(false)
+                        && PY_PRINT_RE.is_match(l)
+                    {
+                        out.push(hit("tui-print-in-loop", file_path, lines, i));
+                    }
+                    i += 1;
+                }
+            }
+            out
+        }
+        Stack::Ratatui | Stack::Charm | Stack::TextualCss => Vec::new(),
+    }
+}
+
 /// Run every terminal rule over one file. `source` is the file text with
 /// comments already blanked (Ink files use the detect crate's JS stripper,
 /// Python files [`strip_python_comments`], the rest [`strip_c_comments`]).
@@ -438,7 +634,11 @@ pub fn scan_terminal_source(
     out.extend(scan_terminal_emoji_density(&lines, file_path));
     out.extend(scan_terminal_double_border(&lines, file_path));
     out.extend(scan_terminal_hardcoded_rgb(&lines, file_path, stack, signals));
-    // Quality rules follow in Task 5.
+    out.extend(scan_terminal_spinner(&lines, file_path, signals));
+    out.extend(scan_terminal_hardcoded_size(&lines, file_path));
+    out.extend(scan_terminal_grapheme_truncate(&lines, file_path, stack, signals));
+    out.extend(scan_terminal_nerd_glyph(&lines, file_path, signals));
+    out.extend(scan_terminal_print_in_loop(&lines, file_path, stack));
     out
 }
 
@@ -617,5 +817,90 @@ mod tests {
             assert_eq!(ids(&scan(s, stack, Some(&NONE))), vec!["tui-hardcoded-rgb-no-adapt"], "{s}");
         }
         assert!(scan("let c = Color::Red;", Stack::Ratatui, Some(&NONE)).is_empty());
+    }
+
+    #[test]
+    fn spinner_without_tty_guard_is_flagged_and_a_guard_silences_it() {
+        let src = "import Spinner from 'ink-spinner';\n";
+        assert_eq!(ids(&scan(src, Stack::Ink, Some(&NONE))), vec!["tui-spinner-no-tty-guard"]);
+        assert!(scan(src, Stack::Ink, Some(&ALL)).is_empty());
+        assert!(scan("s := spinner.New()\n", Stack::Charm, Some(&NONE)).is_empty(), "the import path is what counts");
+        assert_eq!(ids(&scan("import \"github.com/charmbracelet/bubbles/spinner\"\n", Stack::Charm, Some(&NONE))), vec!["tui-spinner-no-tty-guard"]);
+    }
+
+    #[test]
+    fn hardcoded_terminal_size_is_flagged_outside_test_paths() {
+        let src = "let area = Rect::new(0, 0, 80, 24);\nlet width = 80;\nlet rows = 24;\nlet w = term.Width(80)\n";
+        let f = scan_terminal_source(src, "src/ui.rs", Stack::Ratatui, Some(&ALL));
+        assert_eq!(ids(&f), vec!["tui-hardcoded-size"; 4]);
+        assert!(scan_terminal_source(src, "tests/ui_test.rs", Stack::Ratatui, Some(&ALL)).is_empty());
+        assert!(scan_terminal_source(src, "src/ui_test.rs", Stack::Ratatui, Some(&ALL)).is_empty());
+        assert_eq!(scan_terminal_source(src, "tests/fixtures/antipatterns/terminal/x/x.rs", Stack::Ratatui, Some(&ALL)).len(), 4, "a fixture tree under tests/ still scans");
+        assert!(scan("let width = 800;\nlet rows = 240;\n", Stack::Ratatui, Some(&ALL)).is_empty());
+    }
+
+    #[test]
+    fn all_length_layout_is_flagged_once_and_a_flexible_constraint_passes() {
+        let rigid = "Layout::vertical([\n    Constraint::Length(3),\n    Constraint::Length(10),\n    Constraint::Length(1),\n])\n";
+        let f = scan(rigid, Stack::Ratatui, Some(&ALL));
+        assert_eq!(ids(&f), vec!["tui-hardcoded-size"]);
+        assert_eq!(f[0].line, 2.0);
+        assert_eq!(f[0].extras.get("lengthConstraints"), Some(&Value::from(3u64)));
+        let flexible = "Layout::vertical([\n    Constraint::Length(3),\n    Constraint::Min(0),\n    Constraint::Length(1),\n])\n";
+        assert!(scan(flexible, Stack::Ratatui, Some(&ALL)).is_empty());
+    }
+
+    #[test]
+    fn truncation_before_an_ellipsis_is_flagged_without_a_width_library() {
+        for (src, stack) in [
+            ("let short = format!(\"{}...\", &title[..20]);\n", Stack::Ratatui),
+            ("let s = title.chars().take(20).collect::<String>();\nlet t = format!(\"{s}…\");\n", Stack::Ratatui),
+            ("short := title[:20] + \"...\"\n", Stack::Charm),
+            ("const short = title.slice(0, 20) + '...';\n", Stack::Ink),
+        ] {
+            assert_eq!(ids(&scan(src, stack, Some(&NONE))), vec!["tui-grapheme-unsafe-truncate"], "{src}");
+            assert!(scan(src, stack, Some(&ALL)).is_empty(), "a width library silences it: {src}");
+        }
+        assert!(scan("let head = &buf[..4];\n", Stack::Ratatui, Some(&NONE)).is_empty(), "no ellipsis, no truncation for display");
+        assert!(scan("short = title[:20] + '...'\n", Stack::Textual, Some(&NONE)).is_empty(), "Rich and Textual measure for the caller");
+    }
+
+    #[test]
+    fn nerd_glyph_without_an_icon_toggle_reports_once() {
+        let src = "const ICON = \"\u{e0a0}\";\nconst FOLDER = \"\u{f07b}\";\n";
+        let f = scan(src, Stack::Ink, Some(&NONE));
+        assert_eq!(ids(&f), vec!["tui-nerd-glyph-no-fallback"]);
+        assert_eq!(f[0].line, 1.0);
+        assert_eq!(f[0].extras.get("glyphCount"), Some(&Value::from(2u64)));
+        assert!(scan(src, Stack::Ink, Some(&ALL)).is_empty());
+    }
+
+    #[test]
+    fn print_inside_a_textual_widget_is_flagged_but_workers_and_module_level_pass() {
+        let src = "from textual.app import App\nprint(\"module level is fine\")\n\nclass Demo(App):\n    def on_mount(self) -> None:\n        print(\"corrupts the frame\")\n        self.log(\"fine\")\n\n    @work(thread=True)\n    def fetch(self) -> None:\n        print(\"worker output is allowed\")\n\ndef helper():\n    print(\"outside the class\")\n";
+        let f = scan(src, Stack::Textual, Some(&ALL));
+        assert_eq!(ids(&f), vec!["tui-print-in-loop"]);
+        assert_eq!(f[0].line, 6.0);
+    }
+
+    #[test]
+    fn console_log_in_an_ink_component_is_flagged_unless_patch_console_is_used() {
+        let src = "import { Box } from 'ink';\nconsole.log('debug');\n";
+        assert_eq!(ids(&scan(src, Stack::Ink, Some(&ALL))), vec!["tui-print-in-loop"]);
+        let patched = "import { Box } from 'ink';\nimport patchConsole from 'patch-console';\nconsole.log('debug');\n";
+        assert!(scan(patched, Stack::Ink, Some(&ALL)).is_empty());
+    }
+
+    #[test]
+    fn single_file_scan_downgrades_absence_rules() {
+        let src = "import Spinner from 'ink-spinner';\nconst c = <Text color=\"#ff0080\">{title.slice(0, 8) + '...'}</Text>;\nconst i = \"\u{e0a0}\";\n";
+        let f = scan(src, Stack::Ink, None);
+        let noted: Vec<&str> = f.iter().filter(|f| f.extras.get("note") == Some(&Value::String(SIGNALS_NOTE.into()))).map(|f| f.antipattern.as_str()).collect();
+        for id in ["tui-spinner-no-tty-guard", "tui-hardcoded-rgb-no-adapt", "tui-grapheme-unsafe-truncate", "tui-nerd-glyph-no-fallback"] {
+            assert!(noted.contains(&id), "{id} should carry the note: {f:?}");
+        }
+        for f in &f {
+            assert_eq!(f.severity, "advisory", "{}", f.antipattern);
+        }
     }
 }
