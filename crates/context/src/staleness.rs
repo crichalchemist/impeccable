@@ -62,6 +62,8 @@ const NATIVE_EVIDENCE_DEPENDENCIES: [(&str, &str, &str); 4] = [
 /// (manifest file, dependency name, reason). A line matches when, after
 /// trimming whitespace and a leading quote, it starts with the name and the
 /// next character is not part of an identifier, so `richtext` is not `rich`.
+/// A leading `require ` token is skipped so go.mod's single-dependency line
+/// matches as well as the block form.
 const TERMINAL_EVIDENCE_MANIFESTS: [(&str, &str, &str); 8] = [
     ("Cargo.toml", "ratatui", "a ratatui dependency"),
     ("Cargo.toml", "crossterm", "a crossterm dependency"),
@@ -76,6 +78,7 @@ const TERMINAL_EVIDENCE_MANIFESTS: [(&str, &str, &str); 8] = [
 fn manifest_names_dependency(text: &str, name: &str) -> bool {
     text.lines().any(|line| {
         let t = line.trim_start().trim_start_matches(|c| c == '"' || c == '\'');
+        let t = t.strip_prefix("require ").map(str::trim_start).unwrap_or(t);
         if !t.starts_with(name) {
             return false;
         }
@@ -625,6 +628,16 @@ mod terminal_evidence_tests {
         let f = check_native_platform_evidence(&root, None, None, None);
         assert_eq!(f.len(), 1);
         assert!(f[0].summary.contains("a rich dependency"), "{}", f[0].summary);
+    }
+
+    #[test]
+    fn go_mod_single_line_require_counts_as_evidence() {
+        let root = scratch("go-single");
+        write(&root, "go.mod", "module example.com/app\n\ngo 1.22\n\nrequire github.com/charmbracelet/lipgloss v1.0.0\n");
+        let f = check_native_platform_evidence(&root, None, Some("# P\n"), Some("PRODUCT.md"));
+        assert_eq!(f.len(), 1);
+        assert!(f[0].summary.contains("a lipgloss dependency"), "{}", f[0].summary);
+        assert!(f[0].fix.contains("`terminal`"), "{}", f[0].fix);
     }
 
     #[test]
