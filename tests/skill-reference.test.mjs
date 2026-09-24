@@ -89,4 +89,26 @@ describe('skill reference authoring contracts', () => {
     assert.match(edgeCases, /clear the dragging state and release capture/);
     assert.match(verifyHardening, /\*\*Interrupted gestures\*\*/);
   });
+
+  it('gives terminal projects a reference shaped like the mobile ones', () => {
+    const terminal = readFileSync(join(ROOT, 'skill/reference/terminal.md'), 'utf-8').replace(/\r\n?/g, '\n');
+    for (const heading of [
+      '## The terminal slop test',
+      '## Layout & structure',
+      '## Keyboard & input',
+      '## Typography',
+      '## Color',
+      '## Components & controls',
+      '## Motion',
+      '## Verifying the build',
+    ]) {
+      assert.ok(terminal.includes(`\n${heading}\n`), `missing ${heading}`);
+    }
+    const bullets = terminal.split('\n').filter((l) => l.startsWith('- **'));
+    assert.ok(bullets.length >= 25, `expected at least 25 bullets, found ${bullets.length}`);
+    for (const b of bullets) assert.match(b, /<!-- rule:terminal-[a-z0-9-]+ -->$/, `bullet lacks a rule marker: ${b.slice(0, 60)}`);
+    assert.match(terminal, /NO_COLOR/);
+    assert.match(terminal, /tmux capture-pane/);
+    assert.doesNotMatch(terminal, /—/, 'em dash');
+  });
 });
