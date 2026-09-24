@@ -159,5 +159,8 @@ describe('skill reference authoring contracts', () => {
     assert.match(init, /\[terminal\.md\]\(terminal\.md\)/);
     assert.match(audit, /Terminal projects \(`terminal`\) route to \[audit\.terminal\.md\]/);
     assert.match(adapt, /Terminal projects \(`terminal`\) route to \[adapt\.terminal\.md\]/);
+
+    const generate = readFileSync(join(ROOT, 'skill/reference/generate.md'), 'utf-8');
+    assert.match(generate, /on `ios` \/ `android` \/ `adaptive` \/ `terminal` projects, decline this command/);
   });
 });

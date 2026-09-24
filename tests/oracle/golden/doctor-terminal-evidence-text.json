@@ -1,5 +1,5 @@
 {
-  "stdout": "Impeccable doctor: <WS>\n\nworth saying (1):\n  platform-native-evidence  [PRODUCT.md]\n    PRODUCT.md declares `## Platform: web`, but the project carries a bubbletea dependency. Web guidance is being applied to a terminal codebase, and the terminal reference never loads.\n    → Ask the user whether `## Platform` should be `terminal`. If it should, write the value and load the matching native reference before designing.\n\n",
+  "stdout": "Impeccable doctor: <WS>\n\nworth saying (1):\n  platform-native-evidence  [PRODUCT.md]\n    PRODUCT.md declares `## Platform: web`, but the project carries a bubbletea dependency. Web guidance is being applied to a terminal codebase, and the terminal reference never loads.\n    → Ask the user whether `## Platform` should be `terminal`. If it should, write the value and load the matching terminal reference before designing.\n\n",
   "stderr": "",
   "exit": 0,
   "signal": null,

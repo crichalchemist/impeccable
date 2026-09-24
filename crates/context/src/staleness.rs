@@ -63,7 +63,8 @@ const NATIVE_EVIDENCE_DEPENDENCIES: [(&str, &str, &str); 4] = [
 /// trimming whitespace and a leading quote, it starts with the name and the
 /// next character is not part of an identifier, so `richtext` is not `rich`.
 /// A leading `require ` token is skipped so go.mod's single-dependency line
-/// matches as well as the block form.
+/// matches as well as the block form. A Go major-version suffix (`/v2`, `/v3`)
+/// after the module path is accepted.
 const TERMINAL_EVIDENCE_MANIFESTS: [(&str, &str, &str); 8] = [
     ("Cargo.toml", "ratatui", "a ratatui dependency"),
     ("Cargo.toml", "crossterm", "a crossterm dependency"),
@@ -82,7 +83,16 @@ fn manifest_names_dependency(text: &str, name: &str) -> bool {
         if !t.starts_with(name) {
             return false;
         }
-        match t[name.len()..].chars().next() {
+        let rest = &t[name.len()..];
+        // Go's import-versioning rule appends `/vN` to every v2+ module path,
+        // so `github.com/charmbracelet/bubbletea/v2` is still bubbletea.
+        let rest = match rest.strip_prefix("/v") {
+            Some(after) if after.starts_with(|c: char| c.is_ascii_digit()) => {
+                after.trim_start_matches(|c: char| c.is_ascii_digit())
+            }
+            _ => rest,
+        };
+        match rest.chars().next() {
             None => true,
             Some(c) => !(c.is_alphanumeric() || c == '_' || c == '-' || c == '.' || c == '/'),
         }
@@ -245,6 +255,7 @@ pub fn check_native_platform_evidence(
     } else {
         "Web guidance is being applied to a native codebase, and the iOS and Android references never load."
     };
+    let reference = if suggested == "terminal" { "terminal" } else { "native" };
     let declared = if platform == Some("web") {
         "PRODUCT.md declares `## Platform: web`"
     } else if product.map(|p| !p.is_empty()).unwrap_or(false) {
@@ -264,8 +275,8 @@ pub fn check_native_platform_evidence(
             consequence
         ),
         format!(
-            "Ask the user whether `## Platform` should be `{}`. If it should, write the value and load the matching native reference before designing.",
-            suggested
+            "Ask the user whether `## Platform` should be `{}`. If it should, write the value and load the matching {} reference before designing.",
+            suggested, reference
         ),
     )]
 }
@@ -673,7 +684,46 @@ mod terminal_evidence_tests {
     fn a_prefixed_crate_name_is_not_a_match() {
         let root = scratch("prefix");
         write(&root, "Cargo.toml", "[dependencies]\nrichtext = \"1\"\ncrossterm-winapi = \"0.9\"\n");
+        write(&root, "requirements.txt", "richtext==1.0\ntextual-dev==1.0\n");
         let f = check_native_platform_evidence(&root, Some("web"), Some(WEB_PRODUCT), Some("PRODUCT.md"));
         assert!(f.is_empty(), "{:?}", f.iter().map(|x| &x.summary).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn go_major_version_module_path_counts_as_evidence() {
+        let root = scratch("go-v2");
+        write(&root, "go.mod", "module example.com/app\n\ngo 1.22\n\nrequire (\n\tgithub.com/charmbracelet/bubbletea/v2 v2.0.0\n\tgithub.com/charmbracelet/lipgloss/v2 v2.0.0 // indirect\n)\n");
+        let f = check_native_platform_evidence(&root, None, Some("# P\n"), Some("PRODUCT.md"));
+        assert_eq!(f.len(), 1);
+        assert!(f[0].summary.contains("a bubbletea dependency and a lipgloss dependency"), "{}", f[0].summary);
+    }
+
+    #[test]
+    fn go_replace_directive_is_not_a_dependency_line() {
+        let root = scratch("go-replace");
+        write(&root, "go.mod", "module example.com/app\n\ngo 1.22\n\nreplace github.com/charmbracelet/bubbletea => ../fork\n");
+        let f = check_native_platform_evidence(&root, None, Some("# P\n"), Some("PRODUCT.md"));
+        assert!(f.is_empty(), "{:?}", f.iter().map(|x| &x.summary).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn two_mobile_platforms_plus_terminal_resolve_to_adaptive() {
+        let root = scratch("mixed-three");
+        write(&root, "ios/Podfile", "platform :ios, '15.0'\n");
+        write(&root, "android/build.gradle", "apply plugin: 'com.android.application'\n");
+        write(&root, "Cargo.toml", "[dependencies]\nratatui = \"0.29\"\n");
+        let f = check_native_platform_evidence(&root, Some("web"), Some(WEB_PRODUCT), Some("PRODUCT.md"));
+        assert_eq!(f.len(), 1);
+        assert!(f[0].fix.contains("`adaptive`"), "{}", f[0].fix);
+        assert!(f[0].fix.contains("matching native reference"), "{}", f[0].fix);
+    }
+
+    #[test]
+    fn terminal_suggestion_names_the_terminal_reference() {
+        let root = scratch("fix-text");
+        write(&root, "Cargo.toml", "[dependencies]\nratatui = \"0.29\"\n");
+        let f = check_native_platform_evidence(&root, Some("web"), Some(WEB_PRODUCT), Some("PRODUCT.md"));
+        assert_eq!(f.len(), 1);
+        assert!(f[0].fix.contains("matching terminal reference"), "{}", f[0].fix);
     }
 }
