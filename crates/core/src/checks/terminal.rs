@@ -487,7 +487,7 @@ fn scan_terminal_hardcoded_size(lines: &[&str], file_path: &str) -> Vec<Finding>
 re!(RUST_TRUNC_RE, r"&\w+\[\.\.[ \t]*\w+\]|\.chars\(\)\.take\(");
 re!(GO_TRUNC_RE, r"\b\w+\[:\w+\]");
 re!(JS_TRUNC_RE, r"\.slice\(0,|\.substring\(0,");
-re!(ELLIPSIS_RE, r"\.\.\.|…|\\u\{2026\}|\\u2026");
+re!(ELLIPSIS_RE, r#""[^"\n]*\.\.\.[^"\n]*"|'[^'\n]*\.\.\.[^'\n]*'|`[^`\n]*\.\.\.[^`\n]*`|…|\\u\{2026\}|\\u2026"#);
 
 /// Python is not matched: every `.py` file this module sees imports rich or
 /// textual (framework detection), and both measure width for the caller.
@@ -591,14 +591,22 @@ fn scan_terminal_print_in_loop(lines: &[&str], file_path: &str, stack: Stack) ->
                         break;
                     }
                     if PY_DEF_RE.is_match(l) {
-                        method_indent = Some(indent_of(l));
-                        // Decorators sit directly above the def; `@work` marks a worker.
-                        in_worker = false;
-                        let mut k = i;
-                        while k > 0 && lines[k - 1].trim_start().starts_with('@') {
-                            k -= 1;
-                            if lines[k].contains("work") {
-                                in_worker = true;
+                        let def_indent = indent_of(l);
+                        // A def no deeper than the current method is a new method; a
+                        // deeper one is a nested function and leaves the enclosing
+                        // method's indent/worker status unchanged.
+                        let is_new_method = method_indent.map(|m| def_indent <= m).unwrap_or(true);
+                        if is_new_method {
+                            method_indent = Some(def_indent);
+                            // Decorators sit directly above the def; `@work` marks a worker.
+                            in_worker = false;
+                            let mut k = i;
+                            while k > 0 && lines[k - 1].trim_start().starts_with('@') {
+                                k -= 1;
+                                let d = lines[k].trim_start();
+                                if d == "@work" || d.starts_with("@work(") || d.starts_with("@work.") {
+                                    in_worker = true;
+                                }
                             }
                         }
                     } else if !blank
@@ -902,5 +910,28 @@ mod tests {
         for f in &f {
             assert_eq!(f.severity, "advisory", "{}", f.antipattern);
         }
+    }
+
+    #[test]
+    fn non_worker_decorator_does_not_exempt_print() {
+        let src = "from textual.app import App\n\nclass Demo(App):\n    @network_retry\n    def on_mount(self) -> None:\n        print(\"x\")\n";
+        let f = scan(src, Stack::Textual, Some(&ALL));
+        assert_eq!(ids(&f), vec!["tui-print-in-loop"]);
+        assert_eq!(f[0].line, 6.0);
+    }
+
+    #[test]
+    fn print_after_a_nested_helper_is_still_flagged() {
+        let src = "from textual.app import App\n\nclass Demo(App):\n    def on_mount(self) -> None:\n        def inner() -> None:\n            print(\"nested\")\n        print(\"outer\")\n";
+        let f = scan(src, Stack::Textual, Some(&ALL));
+        assert_eq!(ids(&f), vec!["tui-print-in-loop", "tui-print-in-loop"]);
+        let lines: Vec<f64> = f.iter().map(|f| f.line).collect();
+        assert_eq!(lines, vec![6.0, 7.0]);
+    }
+
+    #[test]
+    fn go_variadic_and_js_spread_are_not_ellipses() {
+        assert!(scan("ids := list[:5]\nres := append(dst, more...)\n", Stack::Charm, Some(&NONE)).is_empty());
+        assert!(scan("const a = title.slice(0, 5);\nconst b = {...config};\n", Stack::Ink, Some(&NONE)).is_empty());
     }
 }
