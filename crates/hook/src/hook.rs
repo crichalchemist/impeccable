@@ -262,7 +262,7 @@ pub fn run_hook(rt: &Runtime, stdin: &str) -> RunResult {
         };
         if primary_files.contains(file_path) {
             if harness == "claude" {
-                stop_baseline::capture(rt, &event, &mut cache, &session_id, file_path, use_html_engine);
+                stop_baseline::capture(rt, &event, &mut cache, &session_id, file_path, use_html_engine, platform.as_deref());
             }
             let edit_count = bump_edit_count(&mut cache, &session_id, file_path);
             cache_dirty = true;

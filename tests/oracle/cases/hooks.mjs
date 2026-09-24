@@ -161,7 +161,7 @@ export default [
   // --- terminal platform (spec PR 2): the hook stays on and admits terminal source.
   // Every tui- rule is advisory, so findings reach stdout only when the
   // project includes advisory rules; the audit proves the scan ran either way.
-  { id: 'hook-terminal-platform-edit-rs', verb: 'hook', workspace: 'detect-terminal-project', stdin: claudeEdit('src/main.rs'), files: CACHE_FILES },
+  { id: 'hook-terminal-platform-edit-rs', verb: 'hook', workspace: 'detect-terminal-project', stdin: claudeEdit('src/main.rs'), env: { IMPECCABLE_HOOK_LOG: `${WS}/.impeccable/audit.ndjson` }, files: CACHE_FILES },
   {
     id: 'hook-terminal-platform-edit-rs-advisory-included', verb: 'hook', workspace: 'detect-terminal-project', files: CACHE_FILES,
     setup(ws) {
@@ -184,7 +184,7 @@ export default [
   {
     id: 'hook-web-platform-skips-rs', verb: 'hook', workspace: 'hook-project', files: CACHE_FILES,
     setup(ws) { fs.writeFileSync(`${ws}/src/ui.rs`, 'use ratatui::widgets::BorderType;\nlet b = BorderType::Double;\n'); },
-    stdin: claudeEdit('src/ui.rs'),
+    stdin: claudeEdit('src/ui.rs'), env: { IMPECCABLE_HOOK_LOG: `${WS}/.impeccable/audit.ndjson` },
   },
 
   // --- hook-before-edit.mjs (Cursor) ---

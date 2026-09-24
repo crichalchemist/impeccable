@@ -67,6 +67,18 @@ fn baseline(cache: &Cache, session: &str, file: &str) -> Option<Map<String, Valu
     Some(counts.clone())
 }
 
+/// The `original` preimage scanned with the same `HookScanOptions.platform`
+/// as the real scan `classify` later compares it against; a terminal project
+/// otherwise baselines to zero and every pre-existing `tui-*` finding reads
+/// as new or attribution-unknown at Stop.
+fn scan_original(original: &str, file: &str, platform: Option<&str>) -> Vec<Finding> {
+    let opts = HookScanOptions {
+        platform: platform.map(str::to_string),
+        ..HookScanOptions::default()
+    };
+    detector_detect_text(original, file, &opts)
+}
+
 /// Called before the first primary edit is recorded. An entry without a
 /// baseline (old cache, co-scan, incomplete payload) must stay unknown rather
 /// than adopting a later, already-edited file as its starting point.
@@ -77,6 +89,7 @@ pub fn capture(
     session: &str,
     file: &str,
     html: bool,
+    platform: Option<&str>,
 ) {
     if html || session.is_empty() || session == "unknown" || entry(cache, session, file).is_some() {
         return;
@@ -162,7 +175,7 @@ pub fn capture(
     if std::fs::read_to_string(file).ok().as_deref() != Some(expected.as_str()) {
         return;
     }
-    let findings = detector_detect_text(original, file, &HookScanOptions::default());
+    let findings = scan_original(original, file, platform);
     if findings.len() > MAX_FINDINGS {
         return;
     }
@@ -275,5 +288,15 @@ mod tests {
                 1
             );
         }
+    }
+
+    #[test]
+    fn terminal_baseline_counts_preexisting_tui_findings() {
+        // Spec (review round 1): the baseline preimage must scan with the
+        // same platform as the real scan it is compared against, or a
+        // terminal project's pre-existing tui- findings all read as new.
+        let original = "use ratatui::widgets::BorderType;\nlet b = BorderType::Double;\n";
+        assert_eq!(scan_original(original, "src/main.rs", Some("terminal")).len(), 1);
+        assert_eq!(scan_original(original, "src/main.rs", None).len(), 0);
     }
 }
