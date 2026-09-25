@@ -730,6 +730,7 @@ dependencies = [
 name = "impeccable-terminal"
 version = "0.1.5"
 dependencies = [
+ "impeccable-common",
  "impeccable-core",
  "impeccable-detect",
  "once_cell",
