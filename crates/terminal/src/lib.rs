@@ -6,3 +6,4 @@
 
 pub mod capture;
 pub mod palette;
+pub mod rules;
