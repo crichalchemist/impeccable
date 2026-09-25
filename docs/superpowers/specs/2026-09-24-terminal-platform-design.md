@@ -66,10 +66,12 @@ The spec uses a closed set of terms so later plans can be checked against it.
 
 | manifest | dependency | reason text |
 |---|---|---|
-| `Cargo.toml` | `ratatui`, `crossterm` | a ratatui dependency, a crossterm dependency |
-| `go.mod` | `github.com/charmbracelet/bubbletea`, `github.com/charmbracelet/lipgloss` | a bubbletea dependency, a lipgloss dependency |
-| `pyproject.toml`, `requirements.txt` | `textual`, `rich` | a textual dependency, a rich dependency |
+| `Cargo.toml` | `ratatui` (PR 6 dropped `crossterm`) | a ratatui dependency |
+| `go.mod` | `bubbletea`, `lipgloss`, and (PR 6) `bubbles`, under `github.com/charmbracelet/` or (PR 6) `charm.land/` | a bubbletea dependency, a lipgloss dependency, a bubbles dependency |
+| `pyproject.toml`, `requirements.txt` | `textual` (PR 6 dropped `rich`) | a textual dependency |
 | `package.json` | `ink` | an ink dependency |
+
+PR 6 also counts only direct `require` entries in go.mod (no `// indirect`, nothing in `replace`, `exclude`, or `retract` blocks).
 
 A project resolving to `web` with that evidence gets the existing `platform-native-evidence` mention with suggested value `terminal`. A project declaring `terminal` skips the check, as `ios` does today. Workspace sweeps in `checkWorkspaces` use the same table.
 
@@ -393,7 +395,7 @@ Branch `terminal-platform-pr6`. Scope: `crates/context/src/staleness.rs`, `stale
 - **Doctor wording.** The deep finding says a workspace "carries terminal dependencies" when the evidence is terminal, and keeps "carries native build files" for mobile.
 - **Routing targets.** `scan_targets` takes the platform that `gather_signals` already extracts one line earlier. On `terminal` it also counts `.rs`, `.go`, `.py`, and `.tcss` files, adds `cmd`, `internal`, and `pkg` to the source directories, and targets the root when it holds `Cargo.toml`, `go.mod`, or `pyproject.toml` beside top-level source files. A Go `cmd/` layout or a flat Python package then gets the detect run `routing.md` promises.
 
-Tests: unit tests per matcher change, a unit test per `scan_targets` layout, and two oracle cases recorded with `--bin`: `doctor-terminal-evidence-charm-v2` (a `charm.land` go.mod) and `signals-terminal-go-layout` (a `cmd/` tree). `doctor-terminal-evidence-text` and `-json` are re-recorded for the wording.
+Tests: unit tests per matcher change, a unit test per `scan_targets` layout, and two oracle cases recorded with `--bin`: `doctor-terminal-evidence-charm-v2` (a `charm.land` go.mod) and `signals-terminal-go-layout` (a `cmd/` tree), plus `doctor-monorepo-terminal-evidence` for the workspace wording. `doctor-terminal-evidence-text` and `-json` report the root finding, whose wording does not change, so they replay unchanged.
 
 ### PR 7, skill text
 
