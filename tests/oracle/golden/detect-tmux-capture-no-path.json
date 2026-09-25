@@ -1,0 +1,7 @@
+{
+  "stdout": "",
+  "stderr": "Error: --tmux-capture requires a path to a saved capture\n",
+  "exit": 1,
+  "signal": null,
+  "files": {}
+}

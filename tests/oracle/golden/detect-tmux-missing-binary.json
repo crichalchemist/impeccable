@@ -1,0 +1,7 @@
+{
+  "stdout": "",
+  "stderr": "Error: tmux 3.2 or newer is required for --tmux and was not found on PATH. Install tmux, or point IMPECCABLE_TMUX at the executable.\n",
+  "exit": 1,
+  "signal": null,
+  "files": {}
+}

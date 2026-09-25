@@ -1,0 +1,6 @@
+#!capture width=40 height=5
+┌────────────────────────────────────────────────┐
+┌──────────────────────────────
+Processing the selected directory record
+s to the index
+q quit

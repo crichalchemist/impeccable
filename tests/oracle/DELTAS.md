@@ -194,3 +194,35 @@ Review round 1 also fixed `stop_baseline::capture` (`crates/hook/src/stop_baseli
 `hook-terminal-platform-stop`'s second step (`stop()`) records an empty stdout, not the `tui-hardcoded-rgb-no-adapt` finding the task brief's illustrative expectation named. Traced to source: `.impeccable/config.json` sets `hook.advisoryRules: include` in `setup()`, before either step runs, so the *first* step (`claudeEdit('src/theme.rs')`, a PostToolUse per-edit call) already surfaces `tui-hardcoded-rgb-no-adapt` at L3 and remembers it in the session cache (`"findings":["tui-hardcoded-rgb-no-adapt:3"]`). The Stop step's `dedupe_against_cache` then correctly treats the identical finding as already-shown and reports nothing new — the same dedup behavior every other multi-step `hook`/`stop` oracle case relies on (e.g. `hook-session-fresh-then-pending-then-stop`). Separately, `scan_terminal_hardcoded_rgb` (`crates/core/src/checks/terminal.rs`) fires on a literal `Color::Rgb(...)` regardless of whether `signals` is `Some` or `None` — signals only pick which advisory `note` lands in `extras` (`SIGNALS_NOTE` vs `ADAPTIVE_PRESENT_NOTE` vs no note), and the hook's ack renderer never surfaces `extras.note`, so the per-edit pass (no signals threaded) and the Stop pass (project signals threaded) would have rendered byte-identical finding text even had the Stop pass not deduped it away. The golden is correct; the brief's illustrative expectation assumed the Stop pass would be the first surface of the finding, which does not hold once `advisoryRules: include` is active from the first edit.
 
 Final review: `hook-terminal-platform-stop` now sets `IMPECCABLE_HOOK_LOG`, so its golden gains `.impeccable/audit.ndjson`; the Stop line carries `"scannedFiles":1,"unknownFindings":1`, which shows the `.rs` file was scanned at Stop rather than skipped (stdout is still empty for the dedup reason above). New case `hook-terminal-platform-stop-fresh` seeds the session cache with `src/theme.rs` touched and no remembered findings, then sends only a Stop event: the Stop pass is the first surface, and stdout carries `L3 [tui-hardcoded-rgb-no-adapt] [attribution unknown]`. The Stop pass now walks for project signals only when a touched file is terminal source, and filters that walk through `ignoreFiles` like `detect` does (unit tests `stop_signals_skip_ignored_files` and `stop_signals_owed_only_to_terminal_source` in `crates/hook/src/hook.rs`). `context-terminal` moved because `skill/reference/terminal.md` gained one paragraph saying the hook drops advisory `tui-` findings by default; nothing else in its output changed.
+
+## Recorded 2026-09-24: tmux engine (spec PR 3)
+
+New cases `detect-tmux-*` and `detect-palette-invalid` pin the five tmux flags (`--tmux`, `--tmux-capture`, `--tmux-sizes`, `--tmux-settle`, `--palette`) and the seven `tui-rt-*` runtime rules through saved captures under `tests/fixtures/terminal-captures/`, with no tmux binary involved. One golden per fixture (`detect-tmux-capture-<name>`), plus the text renderer (`detect-tmux-capture-text`), the light palette (`detect-tmux-capture-light-palette`), a capture combined with an HTML file target (`detect-tmux-capture-with-files`), a missing capture file (`detect-tmux-capture-missing`), a missing tmux binary (`detect-tmux-missing-binary`), and one validation case per flag (`detect-tmux-flag-no-target`, `detect-tmux-capture-no-path`, `detect-tmux-sizes-invalid`, `detect-tmux-settle-invalid`, `detect-palette-invalid`).
+
+`detect-help` moved for the new usage lines: the Options block gained `--tmux <target>`, `--tmux-capture <f>`, `--tmux-sizes <list>`, `--tmux-settle <ms>`, and `--palette <name>`; the Detection modes block gained a `tmux panes` line; and the Examples block gained `impeccable detect --tmux app:0.0 --tmux-sizes 80x24,120x40,40x24`. No other golden changed: the runtime rules run only behind `--tmux` / `--tmux-capture`, so every pre-existing scan (fixture, directory, hook, framework) is untouched.
+
+The missing-binary case sets `PATH` to `/nonexistent` and unsets `IMPECCABLE_TMUX` (`env: { PATH: '/nonexistent', IMPECCABLE_TMUX: null }`). Its golden reads exactly:
+
+```
+Error: tmux 3.2 or newer is required for --tmux and was not found on PATH. Install tmux, or point IMPECCABLE_TMUX at the executable.
+```
+
+The other four validation goldens read exactly:
+
+```
+Error: --tmux requires a tmux target, e.g. --tmux app:0.0
+Error: --tmux-capture requires a path to a saved capture
+Error: --tmux-sizes requires comma-separated WxH values, e.g. --tmux-sizes 80x24,120x40,40x24
+Error: --tmux-settle requires a whole number of milliseconds
+Error: --palette requires dark or light
+```
+
+`detect-tmux-capture-missing` reads exactly:
+
+```
+Error: cannot scan <REPO>/tests/fixtures/terminal-captures/does-not-exist.txt: ENOENT: no such file or directory, open '<REPO>/tests/fixtures/terminal-captures/does-not-exist.txt'
+```
+
+`detect-tmux-capture-with-files` exits 2, not 0: `tests/fixtures/antipatterns/blinking-cursor.html` carries a real (non-advisory) `pulsing-dot` finding, so the pre-existing exit-code contract (2 means primary findings present, `crates/detect/src/cli.rs`) applies same as any other scan with a primary finding. The HTML finding is listed first and the tmux advisory finding second, matching target order.
+
+Fixture note: `width-drift.txt` uses a 60-column pane, not 30. On a pane under 60 columns, `tui-rt-collapse-narrow`'s unconditional "a row wider than the pane" check (spec section 4) co-fires with `tui-rt-width-drift`'s wide-glyph overflow check on the same row, because both rules read the same cell count and neither excludes the other. Both rule implementations match their spec table text as written; this is not a rule defect. Widening the pane to 60 columns keeps `tui-rt-collapse-narrow` out of scope (`frames: capture frames under 60 columns`) while preserving both `tui-rt-width-drift` messages, so the fixture pins exactly `row measures 61 cells on a 60-column pane` and `border ends at column 58 while other rows end at 60`.

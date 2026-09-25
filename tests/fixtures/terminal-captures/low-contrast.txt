@@ -1,0 +1,7 @@
+#!capture width=40 height=6 termfeatures=256,RGB colorterm=truecolor
+┌──────────────────────────────────────┐
+│ [38;2;120;120;120;48;2;100;100;100mfaint label[0m  [38;2;255;255;255mclear label[0m             │
+│ [30mblack on default[0m                     │
+│ status: ok                           │
+└──────────────────────────────────────┘
+ q quit  ? help

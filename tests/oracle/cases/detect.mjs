@@ -73,6 +73,30 @@ export default function cases() {
     { id: 'detect-terminal-product-json', verb: 'detect', workspace: 'detect-terminal-project', args: ['--no-config', '--json', 'src'] },
     { id: 'detect-terminal-product-text', verb: 'detect', workspace: 'detect-terminal-project', args: ['--no-config', 'src'] },
     { id: 'detect-terminal-product-flag-web', verb: 'detect', workspace: 'detect-terminal-project', args: ['--no-config', '--json', '--platform', 'web', 'src'] },
+  );
+
+  // The tmux engine (spec section 5) through saved captures, so the oracle
+  // needs no tmux. One golden per fixture, plus the text renderer, the light
+  // palette, the failure paths, and every flag's validation message.
+  const CAPTURES = `<REPO>/tests/fixtures/terminal-captures`;
+  const CAPTURE_FILES = fs.readdirSync(path.join(REPO_ROOT, 'tests', 'fixtures', 'terminal-captures'))
+    .filter((f) => f.endsWith('.txt')).sort();
+  for (const file of CAPTURE_FILES) {
+    out.push({ id: `detect-tmux-capture-${file.replace(/\.txt$/, '')}`, verb: 'detect', args: ['--no-config', '--json', '--tmux-capture', `${CAPTURES}/${file}`], isolateHome: false });
+  }
+  out.push(
+    { id: 'detect-tmux-capture-text', verb: 'detect', args: ['--no-config', '--tmux-capture', `${CAPTURES}/nested-borders.txt`], isolateHome: false },
+    { id: 'detect-tmux-capture-light-palette', verb: 'detect', args: ['--no-config', '--json', '--palette', 'light', '--tmux-capture', `${CAPTURES}/low-contrast.txt`], isolateHome: false },
+    { id: 'detect-tmux-capture-with-files', verb: 'detect', args: ['--no-config', '--json', '--tmux-capture', `${CAPTURES}/no-key-hints.txt`, `<REPO>/tests/fixtures/antipatterns/blinking-cursor.html`], isolateHome: false },
+    { id: 'detect-tmux-capture-missing', verb: 'detect', args: ['--no-config', '--json', '--tmux-capture', `${CAPTURES}/does-not-exist.txt`], isolateHome: false },
+    // No tmux anywhere: PATH names a directory that does not exist and the
+    // override is unset, so the requirement line is the whole output.
+    { id: 'detect-tmux-missing-binary', verb: 'detect', args: ['--no-config', '--tmux', 'nope:0.0'], env: { PATH: '/nonexistent', IMPECCABLE_TMUX: null }, isolateHome: false },
+    { id: 'detect-tmux-flag-no-target', verb: 'detect', args: ['--no-config', '--tmux'], isolateHome: false },
+    { id: 'detect-tmux-capture-no-path', verb: 'detect', args: ['--no-config', '--tmux-capture'], isolateHome: false },
+    { id: 'detect-tmux-sizes-invalid', verb: 'detect', args: ['--no-config', '--tmux', 'nope:0.0', '--tmux-sizes', 'wide'], isolateHome: false },
+    { id: 'detect-tmux-settle-invalid', verb: 'detect', args: ['--no-config', '--tmux', 'nope:0.0', '--tmux-settle', 'soon'], isolateHome: false },
+    { id: 'detect-palette-invalid', verb: 'detect', args: ['--no-config', '--tmux-capture', `${CAPTURES}/low-contrast.txt`, '--palette', 'sepia'], isolateHome: false },
 
     // Flag surface and errors
     { id: 'detect-help', verb: 'detect', args: ['--help'] },

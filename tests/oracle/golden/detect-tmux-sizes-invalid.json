@@ -1,0 +1,7 @@
+{
+  "stdout": "",
+  "stderr": "Error: --tmux-sizes requires comma-separated WxH values, e.g. --tmux-sizes 80x24,120x40,40x24\n",
+  "exit": 1,
+  "signal": null,
+  "files": {}
+}

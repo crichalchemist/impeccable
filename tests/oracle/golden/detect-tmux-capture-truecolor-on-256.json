@@ -1,0 +1,7 @@
+{
+  "stdout": "[\n  {\n    \"antipattern\": \"tui-rt-truecolor-on-256\",\n    \"name\": \"Truecolor sequences sent to a 256-color client\",\n    \"description\": \"The pane wrote 24-bit color while the client reports 256 colors or fewer, so the colors quantize unpredictably. Detect the color tier and fall back to indexed colors.\",\n    \"severity\": \"advisory\",\n    \"category\": \"quality\",\n    \"file\": \"<REPO>/tests/fixtures/terminal-captures/truecolor-on-256.txt\",\n    \"line\": 2,\n    \"snippet\": \"truecolor SGR 38;2;200;100;50 while the client reports 256\",\n    \"advisory\": true,\n    \"column\": 3,\n    \"frame\": \"40x5\"\n  }\n]\n",
+  "stderr": "",
+  "exit": 0,
+  "signal": null,
+  "files": {}
+}
