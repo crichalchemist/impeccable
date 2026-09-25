@@ -1,0 +1,7 @@
+{
+  "stdout": "",
+  "stderr": "Error: --palette requires dark or light\n",
+  "exit": 1,
+  "signal": null,
+  "files": {}
+}

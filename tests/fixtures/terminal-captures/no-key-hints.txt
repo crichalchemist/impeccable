@@ -1,0 +1,6 @@
+#!capture width=40 height=5
+┌──────────────────────────────────────┐
+│ Import finished                      │
+│ 42 files written                     │
+└──────────────────────────────────────┘
+Loading complete.

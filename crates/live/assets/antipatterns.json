@@ -430,5 +430,47 @@
     "name": "Console output inside a TUI render loop",
     "category": "quality",
     "description": "print or console.log inside a running full-screen app corrupts the frame. Log to a file or use the framework's log or patchConsole facility."
+  },
+  {
+    "id": "tui-rt-low-contrast",
+    "name": "Low contrast text in the rendered pane",
+    "category": "quality",
+    "description": "A rendered foreground and background pair measures below 4.5:1 on the reference palette. Pick colors that pass on both a dark and a light terminal theme, or use the terminal's default colors."
+  },
+  {
+    "id": "tui-rt-nested-borders",
+    "name": "Box drawn directly inside another box",
+    "category": "slop",
+    "description": "A bordered region sits inside another bordered region with nothing between them. Borders are the terminal's only container signal; nest at most one level and let padding do the rest."
+  },
+  {
+    "id": "tui-rt-truecolor-on-256",
+    "name": "Truecolor sequences sent to a 256-color client",
+    "category": "quality",
+    "description": "The pane wrote 24-bit color while the client reports 256 colors or fewer, so the colors quantize unpredictably. Detect the color tier and fall back to indexed colors."
+  },
+  {
+    "id": "tui-rt-width-drift",
+    "name": "Row width drifts on emoji or CJK",
+    "category": "quality",
+    "description": "A row containing emoji or CJK measures wider than the pane or breaks the border column. Measure display width with a grapheme-aware library before padding or truncating."
+  },
+  {
+    "id": "tui-rt-no-key-hints",
+    "name": "No key hints on the bottom row",
+    "category": "quality",
+    "description": "The bottom row names no key. Show the two or three keys that matter on every screen; discoverability in a terminal has nowhere else to live."
+  },
+  {
+    "id": "tui-rt-collapse-narrow",
+    "name": "Layout collapses below 60 columns",
+    "category": "quality",
+    "description": "At a narrow width the layout overflows, splits words, or loses the far border. Restructure below 60 columns: hide or stack a region instead of shrinking every pane."
+  },
+  {
+    "id": "tui-rt-spinner-never-rests",
+    "name": "Spinner still cycling with no input",
+    "category": "quality",
+    "description": "A spinner glyph keeps changing across two captures a second apart with nothing to wait for. Show a spinner only while work is pending and replace it with the result."
   }
 ]

@@ -831,6 +831,83 @@ pub static ANTIPATTERNS: &[Antipattern] = &[
         skill_section: None,
         skill_guideline: None,
     },
+    Antipattern {
+        id: "tui-rt-low-contrast",
+        category: "quality",
+        scopes: None,
+        severity: Some("advisory"),
+        platforms: Some(&["terminal"]),
+        name: "Low contrast text in the rendered pane",
+        description: "A rendered foreground and background pair measures below 4.5:1 on the reference palette. Pick colors that pass on both a dark and a light terminal theme, or use the terminal's default colors.",
+        skill_section: None,
+        skill_guideline: None,
+    },
+    Antipattern {
+        id: "tui-rt-nested-borders",
+        category: "slop",
+        scopes: None,
+        severity: Some("advisory"),
+        platforms: Some(&["terminal"]),
+        name: "Box drawn directly inside another box",
+        description: "A bordered region sits inside another bordered region with nothing between them. Borders are the terminal's only container signal; nest at most one level and let padding do the rest.",
+        skill_section: None,
+        skill_guideline: None,
+    },
+    Antipattern {
+        id: "tui-rt-truecolor-on-256",
+        category: "quality",
+        scopes: None,
+        severity: Some("advisory"),
+        platforms: Some(&["terminal"]),
+        name: "Truecolor sequences sent to a 256-color client",
+        description: "The pane wrote 24-bit color while the client reports 256 colors or fewer, so the colors quantize unpredictably. Detect the color tier and fall back to indexed colors.",
+        skill_section: None,
+        skill_guideline: None,
+    },
+    Antipattern {
+        id: "tui-rt-width-drift",
+        category: "quality",
+        scopes: None,
+        severity: Some("advisory"),
+        platforms: Some(&["terminal"]),
+        name: "Row width drifts on emoji or CJK",
+        description: "A row containing emoji or CJK measures wider than the pane or breaks the border column. Measure display width with a grapheme-aware library before padding or truncating.",
+        skill_section: None,
+        skill_guideline: None,
+    },
+    Antipattern {
+        id: "tui-rt-no-key-hints",
+        category: "quality",
+        scopes: None,
+        severity: Some("advisory"),
+        platforms: Some(&["terminal"]),
+        name: "No key hints on the bottom row",
+        description: "The bottom row names no key. Show the two or three keys that matter on every screen; discoverability in a terminal has nowhere else to live.",
+        skill_section: None,
+        skill_guideline: None,
+    },
+    Antipattern {
+        id: "tui-rt-collapse-narrow",
+        category: "quality",
+        scopes: None,
+        severity: Some("advisory"),
+        platforms: Some(&["terminal"]),
+        name: "Layout collapses below 60 columns",
+        description: "At a narrow width the layout overflows, splits words, or loses the far border. Restructure below 60 columns: hide or stack a region instead of shrinking every pane.",
+        skill_section: None,
+        skill_guideline: None,
+    },
+    Antipattern {
+        id: "tui-rt-spinner-never-rests",
+        category: "quality",
+        scopes: None,
+        severity: Some("advisory"),
+        platforms: Some(&["terminal"]),
+        name: "Spinner still cycling with no input",
+        description: "A spinner glyph keeps changing across two captures a second apart with nothing to wait for. Show a spinner only while work is pending and replace it with the result.",
+        skill_section: None,
+        skill_guideline: None,
+    },
 ];
 
 /// The rules the design hook fixes at edit time rather than deferring to a
@@ -1051,7 +1128,7 @@ mod tests {
 
     #[test]
     fn registry_shape() {
-        assert_eq!(ANTIPATTERNS.len(), 72);
+        assert_eq!(ANTIPATTERNS.len(), 79);
         assert_eq!(ANTIPATTERNS[0].id, "side-tab");
         assert_eq!(rule_scopes(), vec!["type", "layout"]);
         assert!(is_advisory_rule("em-dash-overuse"));
@@ -1207,7 +1284,7 @@ mod tests {
         for ap in &ANTIPATTERNS[..first_tui] {
             assert_eq!(ap.platforms, None, "{}", ap.id);
         }
-        assert_eq!(ANTIPATTERNS.len(), 72);
+        assert_eq!(ANTIPATTERNS.len(), 79);
     }
 
     #[test]
@@ -1228,5 +1305,31 @@ mod tests {
             assert!(IMMEDIATE_TIER_RULES.contains(&id), "{id}");
         }
         assert!(!IMMEDIATE_TIER_RULES.contains(&"tui-print-in-loop"));
+    }
+
+    const RT_IDS: &[&str] = &[
+        "tui-rt-low-contrast",
+        "tui-rt-nested-borders",
+        "tui-rt-truecolor-on-256",
+        "tui-rt-width-drift",
+        "tui-rt-no-key-hints",
+        "tui-rt-collapse-narrow",
+        "tui-rt-spinner-never-rests",
+    ];
+
+    #[test]
+    fn runtime_rows_are_advisory_terminal_rows_at_the_end_of_the_registry() {
+        let tail: Vec<&str> = ANTIPATTERNS.iter().rev().take(RT_IDS.len()).map(|a| a.id).rev().collect();
+        assert_eq!(tail, RT_IDS, "runtime rows sit after the source rows so web output never moves");
+        for id in RT_IDS {
+            let ap = get_antipattern(id).unwrap_or_else(|| panic!("{id} missing"));
+            assert_eq!(ap.severity, Some("advisory"), "{id}");
+            assert_eq!(ap.platforms, Some(&["terminal"][..]), "{id}");
+            assert!(!IMMEDIATE_TIER_RULES.contains(id), "{id} never runs in the hook");
+            assert!(!ap.description.contains('\u{2014}'), "{id}: no em dash");
+        }
+        assert_eq!(get_antipattern("tui-rt-nested-borders").unwrap().category, "slop");
+        assert_eq!(get_antipattern("tui-rt-low-contrast").unwrap().category, "quality");
+        assert_eq!(ANTIPATTERNS.len(), 79);
     }
 }

@@ -1,0 +1,7 @@
+{
+  "stdout": "[\n  {\n    \"antipattern\": \"tui-rt-nested-borders\",\n    \"name\": \"Box drawn directly inside another box\",\n    \"description\": \"A bordered region sits inside another bordered region with nothing between them. Borders are the terminal's only container signal; nest at most one level and let padding do the rest.\",\n    \"severity\": \"advisory\",\n    \"category\": \"slop\",\n    \"file\": \"<REPO>/tests/fixtures/terminal-captures/nested-borders.txt\",\n    \"line\": 2,\n    \"snippet\": \"38x4 box drawn directly inside a 40x6 box\",\n    \"advisory\": true,\n    \"column\": 2,\n    \"frame\": \"40x7\"\n  }\n]\n",
+  "stderr": "",
+  "exit": 0,
+  "signal": null,
+  "files": {}
+}

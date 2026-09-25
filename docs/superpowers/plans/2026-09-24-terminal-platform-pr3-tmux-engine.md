@@ -2166,7 +2166,7 @@ PATH=/nonexistent ./target/release/impeccable detect --no-config --tmux smoke:0.
 tmux -L $S kill-server
 ```
 
-Expected: the first run lists `tui-rt-nested-borders` and `tui-rt-no-key-hints` under the Advisory section and exits 0, taking a little over a second (the recapture); the display line reads `60x8 latest`; the second run prints `Error: tmux display-message: can't find session: nope` (tmux's own wording may differ slightly; the prefix is what matters) and exits 1; the third prints the `NOT_FOUND_MESSAGE` line with `Error: ` in front and exits 1.
+Expected: the first run lists `tui-rt-nested-borders` and `tui-rt-no-key-hints` under the Advisory section and exits 0, taking a little over a second (the recapture); the display line reads `60x8 latest`; the second run prints `Error: tmux list-panes: can't find session: nope` and exits 1; the third prints the `NOT_FOUND_MESSAGE` line with `Error: ` in front and exits 1.
 
 - [ ] **Step 5: Commit**
 
@@ -2447,7 +2447,7 @@ describe('tmux engine against a scratch server', { skip: !BIN ? ENGINE_MISSING_M
   it('reports an unknown pane as an operational failure and touches nothing', () => {
     const r = detect('--tmux', 'nope:0.0');
     assert.equal(r.status, 1);
-    assert.match(r.stderr, /^Error: tmux display-message: /);
+    assert.match(r.stderr, /^Error: tmux list-panes: can.t find session: nope/);
     assert.equal(r.stdout, '');
   });
 });
@@ -2528,7 +2528,7 @@ bun run build 2>&1 | tail -n 5     # generateCounts must pass
 - [ ] **Step 2: `docs/CLI-CONTRACT.md`.**
 - Flag table, after the `--platform` row, five rows (the value column and the error column copied from spec section 5's "Flags and messages" table; note that each is spliced out like `--viewport` and accepts `--flag=value`).
 - USAGE block: paste the seven `--tmux*` / `--palette` lines, the `tmux panes` detection-mode lines, and the new example exactly as `crates/detect/src/cli.rs` has them (diff the two blocks: `sed -n '/^pub const USAGE/,/^";/p' crates/detect/src/cli.rs`).
-- After the **Platform** paragraph add: ``**tmux scans**: `--tmux <target>` (repeatable) and `--tmux-capture <file>` (repeatable) are scanned after the file and URL targets, on any resolved platform; when either is present and no file target is given there is no cwd fallback and stdin is not read. A pane failure prints `Error: <message>` (tmux missing: `tmux 3.2 or newer is required for --tmux and was not found on PATH. Install tmux, or point IMPECCABLE_TMUX at the executable.`; too old: `tmux 3.2 or newer is required for --tmux; found <tmux -V>`; bad target: `tmux display-message: <tmux's first stderr line>`) and sets the operational failure; a capture file failure prints `Error: cannot scan <file>: <ENOENT/EACCES message>`. Findings carry `file` `tmux:<target>` (pane) or the resolved path (capture), `line` = 1-based row, `column` = 1-based cell, `frame` = `WxH`, and for `tui-rt-low-contrast` `cellCount`; every runtime rule is advisory. Palette `dark` (default) or `light`; sizes restore the window (`resize-window` back, then `set-option -w -u window-size`).``
+- After the **Platform** paragraph add: ``**tmux scans**: `--tmux <target>` (repeatable) and `--tmux-capture <file>` (repeatable) are scanned after the file and URL targets, on any resolved platform; when either is present and no file target is given there is no cwd fallback and stdin is not read. A pane failure prints `Error: <message>` (tmux missing: `tmux 3.2 or newer is required for --tmux and was not found on PATH. Install tmux, or point IMPECCABLE_TMUX at the executable.`; too old: `tmux 3.2 or newer is required for --tmux; found <tmux -V>`; bad target: `tmux list-panes: <tmux's first stderr line>`, from the `list-panes -t <target>` check that precedes `display-message`) and sets the operational failure; a capture file failure prints `Error: cannot scan <file>: <ENOENT/EACCES message>`. Findings carry `file` `tmux:<target>` (pane) or the resolved path (capture), `line` = 1-based row, `column` = 1-based cell, `frame` = `WxH`, and for `tui-rt-low-contrast` `cellCount`; every runtime rule is advisory. Palette `dark` (default) or `light`; sizes restore the window (`resize-window` back, then `set-option -w -u window-size`).``
 - Line 253: `(72 ids, in order)` becomes `(79 ids, in order)`; append the seven `tui-rt-` ids in registry order after `tui-print-in-loop`; after the `platforms` sentence add: ``The seven `tui-rt-` rows run only in the tmux engine (crates/terminal), never in the text engine, the hook, or the browser adapters.``
 - New section after the URL-scans `Tests:` line:
 

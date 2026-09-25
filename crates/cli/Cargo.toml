@@ -9,6 +9,7 @@ publish.workspace = true
 impeccable-common = { path = "../common" }
 impeccable-context = { path = "../context" }
 impeccable-browser = { path = "../browser" }
+impeccable-terminal = { path = "../terminal" }
 impeccable-detect = { path = "../detect" }
 impeccable-html = { path = "../html" }
 impeccable-hook = { path = "../hook" }

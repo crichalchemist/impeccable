@@ -100,12 +100,19 @@ export const SUITES = {
       /^tests\/fixtures\//,
       /^tests\/lib\/engine-bin\.mjs$/,
       /^skill\/(reference\/|scripts\/)/,
+      /^crates\/terminal\//,
     ],
     commands: [
       {
         runner: 'node',
         timeoutMs: 900000,
         files: ['tests/oracle.test.mjs'],
+      },
+      // The tmux engine against a scratch server; skips without tmux or a binary.
+      {
+        runner: 'node',
+        timeoutMs: 120000,
+        files: ['tests/tmux-engine.test.mjs'],
       },
     ],
   },

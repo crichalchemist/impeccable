@@ -1,0 +1,7 @@
+{
+  "stdout": "[\n  {\n    \"antipattern\": \"tui-rt-width-drift\",\n    \"name\": \"Row width drifts on emoji or CJK\",\n    \"description\": \"A row containing emoji or CJK measures wider than the pane or breaks the border column. Measure display width with a grapheme-aware library before padding or truncating.\",\n    \"severity\": \"advisory\",\n    \"category\": \"quality\",\n    \"file\": \"<REPO>/tests/fixtures/terminal-captures/width-drift.txt\",\n    \"line\": 3,\n    \"snippet\": \"row measures 61 cells on a 60-column pane\",\n    \"advisory\": true,\n    \"column\": 61,\n    \"frame\": \"60x6\"\n  },\n  {\n    \"antipattern\": \"tui-rt-width-drift\",\n    \"name\": \"Row width drifts on emoji or CJK\",\n    \"description\": \"A row containing emoji or CJK measures wider than the pane or breaks the border column. Measure display width with a grapheme-aware library before padding or truncating.\",\n    \"severity\": \"advisory\",\n    \"category\": \"quality\",\n    \"file\": \"<REPO>/tests/fixtures/terminal-captures/width-drift.txt\",\n    \"line\": 4,\n    \"snippet\": \"border ends at column 58 while other rows end at 60\",\n    \"advisory\": true,\n    \"column\": 58,\n    \"frame\": \"60x6\"\n  }\n]\n",
+  "stderr": "",
+  "exit": 0,
+  "signal": null,
+  "files": {}
+}

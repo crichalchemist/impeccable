@@ -32,6 +32,7 @@ crates/
   detect       `impeccable detect`: file walk, config, ignores, output, regex engine
   html         the static HTML engine: parser, cascade, static DOM, rule adapters
   browser      the URL engine: Chrome discovery, CDP, snapshot, visual pass
+  terminal     the tmux engine: capture parser, contrast palette, runtime rules, tmux driver
   foundation   JS-semantics helpers, color, findings, the rule registry, inline
                ignores, the Dom trait, SnapshotDom, and the plain-data types
                every check takes in and hands back
@@ -142,7 +143,8 @@ The built-in rules are compiled in and always run. A **rule pack** is how a
 crate that depends on this workspace adds rules of its own without forking it:
 one process-lifetime value carrying its own registry rows plus the hooks it
 has rules for. With no pack installed nothing changes, which the oracle
-enforces byte-for-byte.
+enforces byte-for-byte. Rule packs do not extend the tmux engine; its rules
+are the seven `tui-rt-` rows in the registry.
 
 The traits:
 

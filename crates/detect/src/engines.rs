@@ -34,6 +34,13 @@ pub struct ScanOptions {
     /// Project signals collected over a directory target on a terminal
     /// project; `None` for single-file targets and for web projects.
     pub signals: Option<Rc<ProjectSignals>>,
+    /// `--tmux-sizes` (tmux scans only): extra WxH captures after the pane's
+    /// own size, restored afterwards.
+    pub tmux_sizes: Vec<(u32, u32)>,
+    /// `--tmux-settle` (tmux scans only); `None` is the engine default (300 ms).
+    pub tmux_settle_ms: Option<u64>,
+    /// `--palette` (tmux scans only): `dark` (default) or `light`.
+    pub palette: Option<String>,
 }
 
 /// An error an engine raises; `detectCli` reports it the way the JS surfaces
@@ -92,10 +99,24 @@ pub trait SharedBrowser {
     }
 }
 
+/// The tmux engine (spec section 5). Implemented by crates/terminal; `detect`
+/// never depends on that crate.
+pub trait TmuxEngine {
+    /// Capture the running pane `target` (`session:window.pane`) at its own
+    /// size, again one second later, and at each `options.tmux_sizes`, then
+    /// run the runtime rules. Findings name `tmux:<target>`.
+    fn detect_pane(&self, target: &str, options: &ScanOptions) -> Result<Vec<Finding>, EngineError>;
+    /// Replay a saved `tmux capture-pane -p -e -J` file (one or more frames).
+    fn detect_capture(&self, path: &str, options: &ScanOptions) -> Result<Vec<Finding>, EngineError>;
+}
+
 /// The engines available to one `detect` run.
 pub struct Engines<'a> {
     pub html: &'a dyn HtmlEngine,
     pub url: Option<&'a dyn UrlEngine>,
+    /// The tmux engine behind `--tmux` / `--tmux-capture`; `None` in a build
+    /// that does not link crates/terminal.
+    pub tmux: Option<&'a dyn TmuxEngine>,
     /// Resolves the project's platform for a cwd. The binary reads PRODUCT.md
     /// through `impeccable_context`; `detect` never depends on that crate, so
     /// the lookup arrives here. `None` (no resolver, or no PRODUCT.md) is web.
@@ -132,5 +153,20 @@ impl UrlEngine for MissingUrlEngine {
         Err(EngineError::new(
             "puppeteer is required for URL scanning. Install: npm install puppeteer",
         ))
+    }
+}
+
+/// A build without crates/terminal (the `cli` binary always links it), so a
+/// missing engine is an internal error reported like `MissingHtmlEngine`'s.
+pub const TMUX_NOT_LINKED: &str = "impeccable detect: tmux engine is not linked into this build";
+
+pub struct MissingTmuxEngine;
+
+impl TmuxEngine for MissingTmuxEngine {
+    fn detect_pane(&self, _target: &str, _options: &ScanOptions) -> Result<Vec<Finding>, EngineError> {
+        Err(EngineError::new(TMUX_NOT_LINKED))
+    }
+    fn detect_capture(&self, _path: &str, _options: &ScanOptions) -> Result<Vec<Finding>, EngineError> {
+        Err(EngineError::new(TMUX_NOT_LINKED))
     }
 }

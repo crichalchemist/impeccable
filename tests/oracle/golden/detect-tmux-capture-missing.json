@@ -1,0 +1,7 @@
+{
+  "stdout": "[]\n",
+  "stderr": "Error: cannot scan <REPO>/tests/fixtures/terminal-captures/does-not-exist.txt: ENOENT: no such file or directory, open '<REPO>/tests/fixtures/terminal-captures/does-not-exist.txt'\n",
+  "exit": 1,
+  "signal": null,
+  "files": {}
+}

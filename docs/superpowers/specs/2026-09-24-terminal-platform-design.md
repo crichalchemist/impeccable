@@ -299,7 +299,7 @@ Values are spliced out of the argument list like `--viewport`'s, so they never b
 
 ### Requirements and degradation
 
-tmux 3.2 or newer (`resize-window -x -y` and `client_termfeatures` both need it). The engine locates tmux through `IMPECCABLE_TMUX`, else `PATH`, and checks `tmux -V`. Without tmux, `--tmux` prints one line, `Error: tmux 3.2 or newer is required for --tmux and was not found on PATH. Install tmux, or point IMPECCABLE_TMUX at the executable.`, sets the operational failure, and the run exits 1 the way a URL scan with no browser does. An older tmux prints `Error: tmux 3.2 or newer is required for --tmux; found <tmux -V output>`. A target tmux cannot find surfaces tmux's own first stderr line as `Error: tmux display-message: <line>`. A `--tmux-capture` file that cannot be read is reported as `Error: cannot scan <file>: <ENOENT or EACCES message>`, like any local file. `--tmux-capture` needs no tmux at all.
+tmux 3.2 or newer (`resize-window -x -y` and `client_termfeatures` both need it). The engine locates tmux through `IMPECCABLE_TMUX`, else `PATH`, and checks `tmux -V`. Without tmux, `--tmux` prints one line, `Error: tmux 3.2 or newer is required for --tmux and was not found on PATH. Install tmux, or point IMPECCABLE_TMUX at the executable.`, sets the operational failure, and the run exits 1 the way a URL scan with no browser does. An older tmux prints `Error: tmux 3.2 or newer is required for --tmux; found <tmux -V output>`. A target tmux cannot find surfaces tmux's own first stderr line as `Error: tmux list-panes: <line>` (the engine checks the target with `list-panes -t <target>` before reading geometry, because `display-message -t` on tmux 3.7 silently resolves a missing target to another pane). A `--tmux-capture` file that cannot be read is reported as `Error: cannot scan <file>: <ENOENT or EACCES message>`, like any local file. `--tmux-capture` needs no tmux at all.
 
 ### Oracle and tests
 
@@ -356,6 +356,20 @@ Recorded here so they are not lost; none is in PR 3's scope.
 - Source rules: `tui-print-in-loop`'s Ink premise was inverted in the original section 4 row (Ink's default is `patchConsole: true`, so PR 2 flags only `patchConsole: false`), and its Textual half is unverified; `ora` and Rich `Live` and `Status` self-guard on a non-TTY, so `tui-spinner-no-tty-guard` likely over-reports them; the emoji range U+2600 to U+27BF catches dingbats and the threshold is `>= 8` where the row says "above 8"; `chalk.hex(` with a computed argument is missed; `tui-hardcoded-size` needs tightening before promotion.
 - Routing: `crates/context/src/signals.rs` `scan_targets` is not platform-aware, so routing's detect run skips terminal source.
 - Process: a CLI driver (headless agents with stream-json) for the skill-behavior suite is its own brainstorm.
+
+## Known gaps after PR 3
+
+Recorded from the PR 3 final review and the manual pass (`docs/superpowers/research/2026-09-24-terminal-runtime-rules-manual-pass.md`). None is fixed in PR 3; each is a candidate for the next spec amendment.
+
+- `tui-rt-collapse-narrow` and `tui-rt-width-drift` both fire on a row wider than a pane under 60 columns, so a 40-column frame reports every overflow row twice.
+- `capture-pane -J` joins soft-wrapped screen rows into one logical row before the parser sees them; the manual pass classed 13 of 15 collapse-narrow findings as this join. Capturing without `-J` keeps screen rows but turns an app's own soft wrap into an overflow at every boundary. The rule stays advisory until one of the two is chosen.
+- `tui-rt-spinner-never-rests` needs the glyph to differ between frame 0 and the recapture one second later. An animation whose period divides one second (ten glyphs at 100 ms) aliases and is missed; a second recapture at an offset such as 700 ms would close the gap.
+- tmux calls have no timeout, so a wedged server hangs `--tmux`. A SIGINT or SIGTERM during the recapture or the size pass leaves the window at the last requested size in `manual` mode.
+- Restore runs `set-option -w -u window-size`, which also drops a `window-size` the user had set on that window before the scan. Restoring the earlier value needs `show-options -w -v window-size` first.
+- Section 5 says trailing blanks are trimmed; the tmux manual says `-J` preserves trailing spaces. The rules tolerate padded rows, so only the sentence needs correcting.
+- `unicode-width` 0.2 and tmux can disagree on the width of some emoji (VS16 sequences, recent additions), which makes a correct row measure one cell off and can trip `tui-rt-width-drift`.
+- `client_termfeatures` is empty on a detached server, so `tui-rt-truecolor-on-256` is silent unless a client is attached to the scanned session.
+- Four rules (`tui-rt-width-drift`, `tui-rt-nested-borders`, `tui-rt-truecolor-on-256`, `tui-rt-spinner-never-rests`) are unmeasured on real programs; `tui-rt-no-key-hints` assumes the bottom row is a footer and misfires on scrolling tables and bare pager prompts.
 
 ## Appendix A: research report
 

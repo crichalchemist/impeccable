@@ -1,0 +1,12 @@
+#!capture width=40 height=5
+┌──────────────────────────────────────┐
+│ Syncing ⠋                            │
+│ 3 of 10 files                        │
+└──────────────────────────────────────┘
+ q quit  ? help
+#!capture width=40 height=5 role=recapture
+┌──────────────────────────────────────┐
+│ Syncing ⠙                            │
+│ 3 of 10 files                        │
+└──────────────────────────────────────┘
+ q quit  ? help
