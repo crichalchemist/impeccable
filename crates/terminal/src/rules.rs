@@ -6,7 +6,7 @@ use impeccable_core::color::contrast_ratio;
 use impeccable_core::findings::{derive_advisory_flag, finding, Finding};
 use serde_json::Value;
 
-use crate::capture::{Color, Frame, FrameRole};
+use crate::capture::{Color, Frame, FrameRole, Style};
 use crate::palette::{hex, Palette};
 
 macro_rules! re {
@@ -80,6 +80,14 @@ fn is_spinner(ch: char) -> bool {
     SPINNER_GLYPHS.contains(ch) || ('\u{2800}'..='\u{28FF}').contains(&ch)
 }
 
+/// The terminal's default colors and the 16 named ones come from the user's
+/// theme, so a ratio measured over them holds only for the `--palette` the
+/// scan assumed (spec section 7, PR 4 item 8).
+fn palette_relative(style: &Style) -> bool {
+    let themed = |c: Color| matches!(c, Color::Default) || matches!(c, Color::Indexed(n) if n < 16);
+    themed(style.fg) || themed(style.bg)
+}
+
 pub fn rt_low_contrast(frame: &Frame, palette: Palette, file: &str) -> Vec<Finding> {
     // One finding per distinct (fg, bg) pair, at the first text cell that fails.
     let mut seen: Vec<(String, String)> = Vec::new();
@@ -119,6 +127,7 @@ pub fn rt_low_contrast(frame: &Frame, palette: Palette, file: &str) -> Vec<Findi
             let snippet = format!("\"{run}\" {} on {}: {shown:.1}:1 (need 4.5:1)", key.0, key.1);
             let mut f = rt_finding("tui-rt-low-contrast", file, frame, r, c, snippet);
             f.extras.insert("cellCount".into(), Value::from(count));
+            f.extras.insert("paletteRelative".into(), Value::from(palette_relative(&cell.style)));
             out.push(f);
         }
     }
@@ -664,5 +673,22 @@ pub(crate) mod tests {
         assert_eq!(rt_no_key_hints(&top, "x").len(), 1, "top names no key on its first row, so it still fires");
         let colon_inside = frame(80, &["NAME", "     less - opposite of more", "DESCRIPTION", "Status: idle"]);
         assert_eq!(rt_no_key_hints(&colon_inside, "x").len(), 1, "a colon inside text is not a prompt");
+    }
+
+    #[test]
+    fn a_ratio_over_theme_colors_is_marked_palette_relative() {
+        let f = frame(40, &[
+            "\x1b[38;2;120;120;120;48;2;100;100;100mfaint\x1b[0m",
+            "\x1b[30mblack on default\x1b[0m",
+            "\x1b[38;5;236;48;5;235mdim cube\x1b[0m",
+            HINTS,
+        ]);
+        let out = rt_low_contrast(&f, Palette::Dark, "x");
+        assert_eq!(out.len(), 3, "{:?}", out.iter().map(|x| &x.snippet).collect::<Vec<_>>());
+        assert_eq!(out[0].extras["paletteRelative"], Value::from(false), "truecolor on truecolor is the same on every theme");
+        assert_eq!(out[1].extras["paletteRelative"], Value::from(true), "named black on the default background comes from the theme");
+        assert_eq!(out[2].extras["paletteRelative"], Value::from(false), "the 256-color cube and grays are fixed");
+        let keys: Vec<&String> = out[0].extras.keys().collect();
+        assert_eq!(keys, vec!["column", "frame", "cellCount", "paletteRelative"], "the new extra comes last");
     }
 }
