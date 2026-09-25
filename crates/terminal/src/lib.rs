@@ -176,16 +176,26 @@ esac
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A fake tmux that logs every subcommand to `calls.log`, fails
-    /// `capture-pane` once `resize-window` has run at least once (marked by
-    /// a file it writes), and fails `set-option` when `set_option_fails`.
-    /// The resize/restore pass in `detect_pane` always calls `resize-window`
-    /// before its own `capture-pane`, so the size-pass capture is the first
-    /// one to see the marker; the two initial captures at the original size
-    /// run before any resize and always succeed.
+    /// A fake tmux that logs every subcommand to `calls.log` and fails
+    /// `set-option` when `set_option_fails`. When `capture_fails_after_resize`
+    /// is set, `capture-pane` fails once `resize-window` has run at least
+    /// once (marked by a file it writes); the resize/restore pass in
+    /// `detect_pane` always calls `resize-window` before its own
+    /// `capture-pane`, so the size-pass capture is the first one to see the
+    /// marker. The two initial captures at the original size run before any
+    /// resize and always succeed either way.
     #[cfg(unix)]
-    fn fake_tmux_that_fails_capture_after_a_resize(set_option_fails: bool) -> String {
+    fn fake_tmux_for_restore_scenarios(capture_fails_after_resize: bool, set_option_fails: bool) -> String {
         let set_option = if set_option_fails { "echo boom >&2; exit 1" } else { "exit 0" };
+        let capture_pane = if capture_fails_after_resize {
+            r#"if [ -f "$DIR/resized" ]; then
+      echo nope >&2
+      exit 1
+    fi
+    echo hi"#
+        } else {
+            "echo hi"
+        };
         format!(
             r#"#!/bin/sh
 DIR="$(dirname "$0")"
@@ -195,11 +205,7 @@ case "$1" in
   list-panes) exit 0 ;;
   display-message) printf '40\t5\t40\t5\t\n' ;;
   capture-pane)
-    if [ -f "$DIR/resized" ]; then
-      echo nope >&2
-      exit 1
-    fi
-    echo hi
+    {capture_pane}
     ;;
   resize-window) touch "$DIR/resized" ;;
   set-option) {set_option} ;;
@@ -211,8 +217,8 @@ esac
 
     #[cfg(unix)]
     #[test]
-    fn a_failed_restore_is_reported_when_capture_succeeded() {
-        let script = fake_tmux_that_fails_capture_after_a_resize(true);
+    fn a_failed_capture_and_a_failed_restore_are_both_reported() {
+        let script = fake_tmux_for_restore_scenarios(true, true);
         let (dir, fake) = fake_tmux("impeccable-terminal-restore-failure", &script);
         let mut env = HashMap::new();
         env.insert("IMPECCABLE_TMUX".to_string(), fake.to_string_lossy().into_owned());
@@ -229,8 +235,22 @@ esac
 
     #[cfg(unix)]
     #[test]
+    fn a_failed_restore_is_reported_when_capture_succeeded() {
+        let script = fake_tmux_for_restore_scenarios(false, true);
+        let (dir, fake) = fake_tmux("impeccable-terminal-restore-only-failure", &script);
+        let mut env = HashMap::new();
+        env.insert("IMPECCABLE_TMUX".to_string(), fake.to_string_lossy().into_owned());
+        let engine = TerminalEngine::new(env);
+        let options = ScanOptions { tmux_sizes: vec![(30, 5)], tmux_settle_ms: Some(0), ..ScanOptions::default() };
+        let err = engine.detect_pane("smoke:0.0", &options).unwrap_err();
+        assert_eq!(err.message, "window not restored: tmux set-option: boom");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn a_failed_capture_still_restores_the_window() {
-        let script = fake_tmux_that_fails_capture_after_a_resize(false);
+        let script = fake_tmux_for_restore_scenarios(true, false);
         let (dir, fake) = fake_tmux("impeccable-terminal-capture-failure", &script);
         let mut env = HashMap::new();
         env.insert("IMPECCABLE_TMUX".to_string(), fake.to_string_lossy().into_owned());
