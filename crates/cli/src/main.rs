@@ -111,9 +111,10 @@ fn run(args: &[String], io: &mut Io) -> i32 {
 pub const CLI_VERSION: &str = "4.0.0";
 
 /// The engines wired into `impeccable detect`: the static HTML engine
-/// (crates/html), the browser engine (crates/browser), and the PRODUCT.md
-/// platform resolver `detect` cannot own (it never depends on crates/context;
-/// the hook resolves through the same function).
+/// (crates/html), the browser engine (crates/browser), the tmux engine
+/// (crates/terminal), and the PRODUCT.md platform resolver `detect` cannot
+/// own (it never depends on crates/context; the hook resolves through the
+/// same function).
 fn engines() -> impeccable_detect::Engines<'static> {
     static HTML: impeccable_html::StaticHtmlEngine = impeccable_html::StaticHtmlEngine {
         // The shipped binary carries the built-in rules only.
@@ -123,7 +124,7 @@ fn engines() -> impeccable_detect::Engines<'static> {
     impeccable_detect::Engines {
         html: &HTML,
         url: Some(url_engine()),
-        tmux: None,
+        tmux: Some(tmux_engine()),
         platform: Some(&RESOLVE),
     }
 }
@@ -141,5 +142,15 @@ fn url_engine() -> &'static impeccable_browser::BrowserEngine {
     static ENGINE: std::sync::OnceLock<impeccable_browser::BrowserEngine> =
         std::sync::OnceLock::new();
     ENGINE.get_or_init(impeccable_browser::BrowserEngine::from_process_env)
+}
+// -------------------------------------------------------------------------
+
+// --- tmux engine (crates/terminal) ----------------------------------------
+/// The tmux engine behind `detect --tmux`, built once from the process
+/// environment (`IMPECCABLE_TMUX`, `PATH`, `TMUX`, `COLORTERM`).
+fn tmux_engine() -> &'static impeccable_terminal::TerminalEngine {
+    static ENGINE: std::sync::OnceLock<impeccable_terminal::TerminalEngine> =
+        std::sync::OnceLock::new();
+    ENGINE.get_or_init(impeccable_terminal::TerminalEngine::from_process_env)
 }
 // -------------------------------------------------------------------------

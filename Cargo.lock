@@ -539,6 +539,7 @@ dependencies = [
  "impeccable-html",
  "impeccable-live",
  "impeccable-skills",
+ "impeccable-terminal",
  "serde_json",
 ]
 
