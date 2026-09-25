@@ -32,7 +32,8 @@ pub const SIGNALS_NOTE: &str =
 pub enum Stack {
     /// Rust: ratatui or crossterm.
     Ratatui,
-    /// Go: any charmbracelet import (Bubble Tea, Lip Gloss, Bubbles).
+    /// Go: any charmbracelet import (Bubble Tea, Lip Gloss, Bubbles), including
+    /// the v2 `charm.land/...` module paths.
     Charm,
     /// Python: textual or rich.
     Textual,
@@ -50,7 +51,7 @@ re!(INK_IMPORT_RE, r#"(?:from[ \t]+|require\([ \t]*)["']ink(?:-[a-z0-9-]+)?["']"
 pub fn classify_terminal_source(ext: &str, text: &str) -> Option<Stack> {
     match ext {
         ".rs" if text.contains("ratatui") || text.contains("crossterm") => Some(Stack::Ratatui),
-        ".go" if text.contains("charmbracelet") => Some(Stack::Charm),
+        ".go" if text.contains("charmbracelet") || text.contains("charm.land/") => Some(Stack::Charm),
         ".py" if PY_TEXTUAL_RE.is_match(text) => Some(Stack::Textual),
         ".tcss" => Some(Stack::TextualCss),
         ".tsx" | ".jsx" | ".ts" | ".js" | ".mjs" | ".cjs" if INK_IMPORT_RE.is_match(text) => {
@@ -389,7 +390,7 @@ fn scan_terminal_double_border(lines: &[&str], file_path: &str) -> Vec<Finding> 
 // ─── tui-hardcoded-rgb-no-adapt ─────────────────────────────────────────────
 re!(
     RGB_RE,
-    r##"Color::Rgb\(|Color::from_u32\(0x|lipgloss\.Color\("#|chalk\.hex\(|\bcolor=["']#|\[#[0-9a-fA-F]{6}\]|\\x1b\[38;2;|\\033\[38;2;|\x1b\[38;2;"##
+    r##"Color::Rgb\((?:[ \t]*(?:0x[0-9a-fA-F]+|\d+)[ \t]*,){2}[ \t]*(?:0x[0-9a-fA-F]+|\d+)[ \t]*\)|Color::from_u32\(0x|lipgloss\.Color\("#|chalk\.hex\(|\bcolor=["']#|\[#[0-9a-fA-F]{6}\]|\\x1b\[38;2;|\\033\[38;2;|\x1b\[38;2;"##
 );
 /// The note `tui-hardcoded-rgb-no-adapt` carries when the project does have
 /// an adaptive color helper somewhere: the literal may still be themed.
@@ -422,7 +423,7 @@ fn scan_terminal_hardcoded_rgb(
 }
 
 // ─── tui-spinner-no-tty-guard ───────────────────────────────────────────────
-re!(SPINNER_RE, r"ink-spinner|\bora\(|rich\.spinner|bubbles/spinner|briandowns/spinner");
+re!(SPINNER_RE, r"ink-spinner|\bora\(|rich\.spinner|bubbles/(?:v\d+/)?spinner|briandowns/spinner");
 
 fn scan_terminal_spinner(lines: &[&str], file_path: &str, signals: Option<&ProjectSignals>) -> Vec<Finding> {
     if matches!(signals, Some(s) if s.has_tty_guard) {
@@ -935,6 +936,32 @@ mod tests {
         assert_eq!(ids(&f), vec!["tui-print-in-loop", "tui-print-in-loop"]);
         let lines: Vec<f64> = f.iter().map(|f| f.line).collect();
         assert_eq!(lines, vec![6.0, 7.0]);
+    }
+
+    #[test]
+    fn charm_v2_vanity_import_is_terminal_source() {
+        assert_eq!(classify_terminal_source(".go", "import tea \"charm.land/bubbletea/v2\""), Some(Stack::Charm));
+        assert_eq!(classify_terminal_source(".go", "import \"charm.land/lipgloss/v2\""), Some(Stack::Charm));
+    }
+
+    #[test]
+    fn a_v2_bubbles_spinner_import_is_seen() {
+        let src = "import \"charm.land/bubbles/v2/spinner\"\n";
+        assert_eq!(ids(&scan(src, Stack::Charm, Some(&NONE))), vec!["tui-spinner-no-tty-guard"]);
+    }
+
+    #[test]
+    fn computed_and_destructured_rgb_is_not_a_hardcoded_color() {
+        for src in [
+            "let Color::Rgb(r, g, b) = color else { return; };\n",
+            "let c = Color::Rgb(color.red, color.green, color.blue);\n",
+            "Color::Rgb(rand::random(), rand::random(), rand::random())\n",
+            "let c = Color::Rgb(255, green, 0);\n",
+        ] {
+            assert!(scan(src, Stack::Ratatui, Some(&NONE)).is_empty(), "{src}");
+        }
+        assert_eq!(ids(&scan("const BG: Color = Color::Rgb( 20, 20, 50 );\n", Stack::Ratatui, Some(&NONE))), vec!["tui-hardcoded-rgb-no-adapt"]);
+        assert_eq!(ids(&scan("const BG: Color = Color::Rgb(0x20, 0x30, 0x60);\n", Stack::Ratatui, Some(&NONE))), vec!["tui-hardcoded-rgb-no-adapt"], "hex channels are literals too");
     }
 
     #[test]
