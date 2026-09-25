@@ -88,8 +88,12 @@ impl TmuxEngine for TerminalEngine {
         if !options.tmux_sizes.is_empty() {
             let captured = capture_sizes(&tmux, target, options, &colorterm, &mut frames);
             let restored = tmux.restore(target, info.window_width, info.window_height);
-            captured.map_err(EngineError::new)?;
-            restored.map_err(EngineError::new)?;
+            match (captured, restored) {
+                (Err(c), Err(r)) => return Err(EngineError::new(format!("{c}; window not restored: {r}"))),
+                (Ok(()), Err(r)) => return Err(EngineError::new(format!("window not restored: {r}"))),
+                (Err(c), Ok(())) => return Err(EngineError::new(c)),
+                (Ok(()), Ok(())) => {}
+            }
         }
         Ok(rules::scan_frames(&frames, palette_for(options), &format!("tmux:{target}")))
     }
@@ -139,6 +143,60 @@ mod tests {
         assert_eq!(out[0].file, file.to_string_lossy());
         let missing = engine.detect_capture("/nonexistent/x.txt", &ScanOptions::default()).unwrap_err();
         assert_eq!(missing.message, "ENOENT: no such file or directory, open '/nonexistent/x.txt'");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    fn fake_tmux(dir_name: &str, script: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("{dir_name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fake = dir.join("tmux");
+        std::fs::write(&fake, script).unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        (dir, fake)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn missing_target_is_reported_with_tmux_own_line() {
+        let script = r#"#!/bin/sh
+case "$1" in
+  -V) echo "tmux 3.7c" ;;
+  list-panes) echo "can't find session: nope" >&2; exit 1 ;;
+  *) exit 1 ;;
+esac
+"#;
+        let (dir, fake) = fake_tmux("impeccable-terminal-missing-target", script);
+        let mut env = HashMap::new();
+        env.insert("IMPECCABLE_TMUX".to_string(), fake.to_string_lossy().into_owned());
+        let engine = TerminalEngine::new(env);
+        let err = engine.detect_pane("nope:0.0", &ScanOptions::default()).unwrap_err();
+        assert_eq!(err.message, "tmux list-panes: can't find session: nope");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn restore_failure_is_reported_alongside_a_capture_failure() {
+        let script = r#"#!/bin/sh
+case "$1" in
+  -V) echo "tmux 3.7c" ;;
+  list-panes) exit 0 ;;
+  display-message) printf '40\t5\t40\t5\t\n' ;;
+  capture-pane) echo "hi" ;;
+  resize-window) exit 0 ;;
+  set-option) echo boom >&2; exit 1 ;;
+  *) exit 1 ;;
+esac
+"#;
+        let (dir, fake) = fake_tmux("impeccable-terminal-restore-failure", script);
+        let mut env = HashMap::new();
+        env.insert("IMPECCABLE_TMUX".to_string(), fake.to_string_lossy().into_owned());
+        let engine = TerminalEngine::new(env);
+        let options = ScanOptions { tmux_sizes: vec![(30, 5)], tmux_settle_ms: Some(0), ..ScanOptions::default() };
+        let err = engine.detect_pane("smoke:0.0", &options).unwrap_err();
+        assert_eq!(err.message, "window not restored: tmux set-option: boom");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
