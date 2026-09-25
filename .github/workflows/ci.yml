@@ -253,6 +253,11 @@ jobs:
           IMPECCABLE_BIN: ${{ github.workspace }}/target/release/impeccable
         run: node tests/oracle/run.mjs
 
+      - name: Run the tmux engine against a scratch server
+        env:
+          IMPECCABLE_BIN: ${{ github.workspace }}/target/release/impeccable
+        run: node --test tests/tmux-engine.test.mjs
+
   # Release-order guard (triage decision D4). Verifies that the engine release for
   # the pinned ENGINE_VERSION is fully published — the five dist binaries + .sha256
   # AND the five @impeccable/cli-<os>-<arch> npm platform packages — before a skill
