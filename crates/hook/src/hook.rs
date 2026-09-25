@@ -2,7 +2,7 @@
 //! `runHook` / `runStopHook`: the PostToolUse per-edit pass and the Stop deep
 //! pass. Always exits 0; stdout is one JSON document or nothing.
 
-use impeccable_core::checks::terminal::ProjectSignals;
+use impeccable_core::checks::terminal::{classify_terminal_source, ProjectSignals, Stack, TERMINAL_EXTENSIONS};
 use impeccable_core::findings::Finding;
 use impeccable_core::js;
 use serde_json::{Map, Value};
@@ -590,6 +590,30 @@ pub fn run_hook(rt: &Runtime, stdin: &str) -> RunResult {
     result(&audit, extra)
 }
 
+/// A touched file that can get terminal rules, so the Stop pass owes it
+/// project signals: a terminal-only extension, or JS/TS that imports Ink.
+fn is_terminal_source(ext: &str, content: &str) -> bool {
+    TERMINAL_EXTENSIONS.contains(&ext)
+        || classify_terminal_source(ext, content) == Some(Stack::Ink)
+}
+
+/// Project signals over the file set `detect` would read: the terminal walk
+/// of the project, minus the `ignoreFiles` globs, so an ignored file cannot
+/// silence a rule in the hook that `detect` still reports.
+fn collect_terminal_signals(project_cwd: &str, ignore_files: &[String]) -> ProjectSignals {
+    let mut signals = ProjectSignals::default();
+    for f in impeccable_detect::file_system::walk_dir_reporting_for(project_cwd, Some("terminal"), &mut |_, _| {}) {
+        let rel = jsp::to_posix(&jsp::relative(project_cwd, project_cwd, &f));
+        if matches_any_glob_list(&rel, ignore_files) || matches_any_glob_list(&f, ignore_files) {
+            continue;
+        }
+        if let Some(text) = safe_read(&f) {
+            signals.absorb(&text);
+        }
+    }
+    signals
+}
+
 /// JS: runStopHook({ stdinJson, env, cwd })
 pub fn run_stop_hook(rt: &Runtime, stdin: &str) -> RunResult {
     let mut audit: Map<String, Value> = Map::new();
@@ -712,19 +736,11 @@ pub fn run_stop_hook(rt: &Runtime, stdin: &str) -> RunResult {
         );
     }
     // Spec section 3, "Hook": the deep pass runs the terminal rules with
-    // project signals, collected the same way `detect` collects them. One
-    // walk per hook run, not per touched file.
-    let terminal_signals: Option<Rc<ProjectSignals>> = if platform.as_deref() == Some("terminal") {
-        let mut signals = ProjectSignals::default();
-        for f in impeccable_detect::file_system::walk_dir_reporting_for(&project_cwd, Some("terminal"), &mut |_, _| {}) {
-            if let Some(text) = safe_read(&f) {
-                signals.absorb(&text);
-            }
-        }
-        Some(Rc::new(signals))
-    } else {
-        None
-    };
+    // project signals, collected the same way `detect` collects them. At
+    // most one walk per hook run, and only once a touched file is terminal
+    // source.
+    let terminal_project = platform.as_deref() == Some("terminal");
+    let mut terminal_signals: Option<Rc<ProjectSignals>> = None;
     let mut scans = HashMap::new();
 
     let mut fresh_groups: Vec<Group> = Vec::new();
@@ -773,6 +789,9 @@ pub fn run_stop_hook(rt: &Runtime, stdin: &str) -> RunResult {
             design_system_options_for_file(rt, &config, &project_cwd, file_path)
         });
         scan.platform = platform.clone();
+        if terminal_project && terminal_signals.is_none() && is_terminal_source(&ext, &content) {
+            terminal_signals = Some(Rc::new(collect_terminal_signals(&project_cwd, &config.ignore_files)));
+        }
         scan.signals = terminal_signals.clone();
         // JS: a detector failure tells us nothing about the file. Leave
         // whatever was remembered alone rather than recording an empty scan
@@ -917,4 +936,46 @@ pub fn run(rt: &Runtime, stdin: &str, io: &mut impeccable_common::Io) -> i32 {
         io.out(&result.stdout);
     }
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn project(name: &str, files: &[(&str, &str)]) -> String {
+        let dir = std::env::temp_dir().join(format!("impeccable-hook-signals-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for (rel, text) in files {
+            let p = dir.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
+        }
+        dir.to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn stop_signals_skip_ignored_files() {
+        let root = project(
+            "ignored",
+            &[
+                ("src/app.py", "from rich.progress import track\n"),
+                ("scripts/tty.py", "import sys\nsys.stdout.isatty()\n"),
+            ],
+        );
+        assert!(collect_terminal_signals(&root, &[]).has_tty_guard, "the guard counts when not ignored");
+        let ignored = vec!["scripts/**".to_string()];
+        assert!(
+            !collect_terminal_signals(&root, &ignored).has_tty_guard,
+            "an ignored file's isatty must not silence tui-spinner-no-tty-guard in the hook"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn stop_signals_owed_only_to_terminal_source() {
+        assert!(is_terminal_source(".rs", "fn main() {}"));
+        assert!(is_terminal_source(".tsx", "import { Box } from 'ink';"));
+        assert!(!is_terminal_source(".tsx", "import React from 'react';"));
+        assert!(!is_terminal_source(".css", ".a { color: red; }"));
+    }
 }

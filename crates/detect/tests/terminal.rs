@@ -22,8 +22,16 @@ fn text(content: &str, path: &str, platform: Option<&str>, signals: Option<&Proj
 #[test]
 fn web_project_with_rust_backend_gets_no_terminal_rules() {
     for platform in [None, Some("web"), Some("ios"), Some("adaptive")] {
-        assert!(text(RATATUI_DOUBLE, "/app/src/ui.rs", platform, None).is_empty(), "{platform:?}");
+        let ids = text(RATATUI_DOUBLE, "/app/src/ui.rs", platform, None);
+        assert!(ids.iter().all(|id| !id.starts_with("tui-")), "{platform:?}: {ids:?}");
     }
+}
+
+#[test]
+fn explicit_python_file_on_web_project_still_gets_web_findings() {
+    let src = "CSS = \"\"\".card { border-left: 4px solid #6366f1; border-radius: 12px; }\"\"\"\n";
+    let ids = text(src, "/app/app.py", None, None);
+    assert!(ids.iter().any(|id| id.starts_with("side-tab@")), "{ids:?}");
 }
 
 #[test]

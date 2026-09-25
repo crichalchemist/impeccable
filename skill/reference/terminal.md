@@ -59,3 +59,5 @@ A terminal surface reads as generated when it opens with a figlet banner in a gr
 
 - **Capture, do not describe.** Run the app in a tmux pane and capture it with `tmux capture-pane -p -e -J -t <target>` (the `-e` keeps colors), or use the stack's own snapshot: Textual `--screenshot` and `snap_compare`, Ratatui `TestBackend` with insta, Ink `lastFrame()`, a VHS tape with `Set Columns` and `Set Rows`. Write the captures where the review flow expects them. <!-- rule:terminal-verify-capture -->
 - **Run the matrix.** 80x24, 120x40, and about 30 columns; a live resize; a dark and a light theme; `NO_COLOR=1`; `TERM=dumb`; stdout piped through `cat`; no Nerd Font; rows with CJK and emoji. Say which configurations produced the evidence. <!-- rule:terminal-verify-matrix -->
+
+Every `tui-` rule is advisory. The design hook drops advisory findings unless `.impeccable/config.json` sets `{"hook":{"advisoryRules":"include"}}`, so on a terminal project it shows nothing by default. Run `{{scripts_path}}/impeccable detect --json <source directory>` to see them without that setting.

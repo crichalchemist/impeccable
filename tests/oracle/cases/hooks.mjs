@@ -172,12 +172,31 @@ export default [
   },
   {
     id: 'hook-terminal-platform-stop', workspace: 'detect-terminal-project', files: CACHE_FILES,
+    env: { IMPECCABLE_HOOK_LOG: `${WS}/.impeccable/audit.ndjson` },
     setup(ws) {
       fs.mkdirSync(`${ws}/.impeccable`, { recursive: true });
       fs.writeFileSync(`${ws}/.impeccable/config.json`, JSON.stringify({ hook: { advisoryRules: 'include' } }) + '\n');
     },
     steps: [
       { verb: 'hook', stdin: claudeEdit('src/theme.rs') },
+      { verb: 'hook', stdin: stop() },
+    ],
+  },
+  // The Stop pass is the first surface: the session cache lists src/theme.rs
+  // as touched but remembers no findings, so the Stop deep pass itself must
+  // scan the .rs file and report the tui- finding.
+  {
+    id: 'hook-terminal-platform-stop-fresh', workspace: 'detect-terminal-project', files: CACHE_FILES,
+    env: { IMPECCABLE_HOOK_LOG: `${WS}/.impeccable/audit.ndjson` },
+    setup(ws) {
+      fs.mkdirSync(`${ws}/.impeccable`, { recursive: true });
+      fs.writeFileSync(`${ws}/.impeccable/config.json`, JSON.stringify({ hook: { advisoryRules: 'include' } }) + '\n');
+      fs.writeFileSync(`${ws}/.impeccable/hook.cache.json`, JSON.stringify({
+        version: 1,
+        sessions: { s1: { updatedAt: Date.now(), files: { [`${ws}/src/theme.rs`]: { editCount: 1 } } } },
+      }));
+    },
+    steps: [
       { verb: 'hook', stdin: stop() },
     ],
   },

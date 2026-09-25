@@ -72,7 +72,7 @@ re!(
 );
 re!(
     ICON_TOGGLE_RE,
-    r#"--no-icons|["'](?:--)?(?:ascii|nerd|icons)["']|\b(?:ascii|nerd|icons)[ \t]*[:=]"#
+    r#"--(?:no-)?icons\b|--ascii\b|["'](?:--)?(?:no-)?(?:icons|ascii)["']|NERD_FONT|nerd_font|nerdFont|\bascii[ \t]*:[ \t]*bool\b"#
 );
 re!(PLAIN_FLAG_RE, r"--plain|--json|--no-tui|--static|NO_TUI");
 
@@ -108,10 +108,29 @@ impl ProjectSignals {
     }
 }
 
+/// A Rust raw string opener (`r"`, `r#"`, `br##"`, ...) at `i`, not preceded
+/// by an identifier character. Returns the hash count and the opener length.
+fn rust_raw_string_opener(c: &[char], i: usize) -> Option<(usize, usize)> {
+    if i > 0 && (c[i - 1].is_alphanumeric() || c[i - 1] == '_') {
+        return None;
+    }
+    let mut j = i;
+    if c.get(j) == Some(&'b') {
+        j += 1;
+    }
+    if c.get(j) != Some(&'r') {
+        return None;
+    }
+    j += 1;
+    let hashes = c[j..].iter().take_while(|ch| **ch == '#').count();
+    j += hashes;
+    (c.get(j) == Some(&'"')).then_some((hashes, j + 1 - i))
+}
+
 /// Blank `//` and `/* */` comments in Rust, Go, or Textual CSS, keeping every
-/// newline so line numbers hold. String literals (`"..."`, Go backtick raw
-/// strings) and Rust char literals are copied verbatim, so `"http://x"` and
-/// `'/'` survive.
+/// newline so line numbers hold. String literals (`"..."`, Rust raw strings,
+/// Go backtick raw strings) and Rust char literals are copied verbatim, so
+/// `"http://x"` and `'/'` survive.
 pub fn strip_c_comments(text: &str) -> String {
     let c: Vec<char> = text.chars().collect();
     let mut out = String::with_capacity(text.len());
@@ -134,6 +153,20 @@ pub fn strip_c_comments(text: &str) -> String {
             if i < n {
                 out.push_str("  ");
                 i += 2;
+            }
+        } else if let Some((hashes, opener)) = rust_raw_string_opener(&c, i) {
+            // `r#"..."#` and `br"..."`: no escapes, and the literal ends only
+            // at a quote followed by the same number of hashes.
+            out.extend(&c[i..i + opener]);
+            i += opener;
+            while i < n {
+                if c[i] == '"' && (1..=hashes).all(|h| i + h < n && c[i + h] == '#') {
+                    out.extend(&c[i..=i + hashes]);
+                    i += hashes + 1;
+                    break;
+                }
+                out.push(c[i]);
+                i += 1;
             }
         } else if ch == '"' || ch == '`' {
             let q = ch;
@@ -453,10 +486,19 @@ re!(CONSTRAINT_FLEX_RE, r"Constraint::(?:Min|Max|Percentage|Ratio|Fill)\(");
 
 /// Test code pins sizes on purpose (spec: "outside paths containing test").
 /// Only the file name and its parent directory are consulted, so a fixture
-/// tree under `tests/fixtures/` still scans (planning ruling 7).
+/// tree under `tests/fixtures/` still scans (planning ruling 7). Both are
+/// matched whole, not as substrings, so `src/latest.rs` still scans.
 fn in_test_path(file_path: &str) -> bool {
     let lower = file_path.to_lowercase().replace('\\', "/");
-    lower.rsplit('/').take(2).any(|seg| seg.contains("test"))
+    let mut segs = lower.rsplit('/');
+    let name = segs.next().unwrap_or("");
+    let parent = segs.next().unwrap_or("");
+    let stem = name.rsplit_once('.').map_or(name, |(s, _)| s);
+    matches!(parent, "test" | "tests" | "__tests__" | "spec")
+        || name.starts_with("test_")
+        || stem.ends_with("_test")
+        || name.contains(".test.")
+        || name.contains(".spec.")
 }
 
 fn scan_terminal_hardcoded_size(lines: &[&str], file_path: &str) -> Vec<Finding> {
@@ -553,6 +595,7 @@ re!(
 re!(PY_DEF_RE, r"^[ \t]*(?:async[ \t]+)?def[ \t]+\w+");
 re!(PY_PRINT_RE, r"(?:^|[^.\w])print\(");
 re!(INK_CONSOLE_LOG_RE, r"\bconsole\.log\(");
+re!(PATCH_CONSOLE_OFF_RE, r"\bpatchConsole[ \t]*:[ \t]*false\b");
 
 fn indent_of(line: &str) -> usize {
     line.chars().take_while(|c| *c == ' ' || *c == '\t').count()
@@ -561,7 +604,10 @@ fn indent_of(line: &str) -> usize {
 fn scan_terminal_print_in_loop(lines: &[&str], file_path: &str, stack: Stack) -> Vec<Finding> {
     match stack {
         Stack::Ink => {
-            if lines.iter().any(|l| l.contains("patchConsole") || l.contains("patch-console")) {
+            // Ink defaults to `patchConsole: true`, which captures console
+            // output and re-renders it above the frame. Only a file that
+            // turns that off can corrupt the frame with `console.log`.
+            if !lines.iter().any(|l| PATCH_CONSOLE_OFF_RE.is_match(l)) {
                 return Vec::new();
             }
             lines
@@ -687,6 +733,47 @@ mod tests {
         assert!(!s.has_plain_flag);
         let s = ProjectSignals::collect(["if os.environ.get(\"CI\"): quiet()", "style = lipgloss.AdaptiveColor{}", "flags.Bool(\"no-icons\", ...)  // --no-icons", "--json"]);
         assert!(s.has_tty_guard && s.has_adaptive_color && s.has_icon_toggle && s.has_plain_flag);
+    }
+
+    #[test]
+    fn a_glyph_table_named_icons_is_not_an_icon_fallback() {
+        let table = "var icons = map[string]string{\n\t\"branch\": \"\u{e0a0}\",\n}\n";
+        let signals = ProjectSignals::collect([table]);
+        assert!(!signals.has_icon_toggle, "the glyph table itself is not a fallback");
+        assert_eq!(ids(&scan(table, Stack::Charm, Some(&signals))), vec!["tui-nerd-glyph-no-fallback"]);
+        for bare in ["icons = {\"x\": \"\u{e0a0}\"}", "icons := []string{}", "const icons = {};"] {
+            assert!(!ProjectSignals::collect([bare]).has_icon_toggle, "{bare}");
+        }
+        let flag = "flag.Bool(\"no-icons\", false, \"--no-icons: plain ASCII glyphs\")\n";
+        let signals = ProjectSignals::collect([table, flag]);
+        assert!(signals.has_icon_toggle, "a --no-icons flag definition is a fallback");
+        assert!(scan(table, Stack::Charm, Some(&signals)).is_empty());
+        for option in ["--icons", "{\"icons\": true}", "cfg.get('icons')", "NERD_FONT=1", "nerd_font = True", "nerdFont: false", "--ascii", "ascii: bool,"] {
+            assert!(ProjectSignals::collect([option]).has_icon_toggle, "{option}");
+        }
+    }
+
+    #[test]
+    fn rust_raw_strings_do_not_flip_comment_blanking() {
+        let src = "let s = r#\"a \"quote\"#;\n// let c = BorderType::Double;\n";
+        let out = strip_c_comments(src);
+        assert!(out.contains("r#\"a \"quote\"#"), "{out}");
+        assert!(!out.contains("BorderType::Double"), "{out}");
+        assert!(scan(&out, Stack::Ratatui, Some(&ALL)).is_empty(), "the commented-out border is not reported");
+        let bytes = "let b = br##\"x\"# \"##;\n// Color::Rgb(1, 2, 3)\n";
+        assert!(!strip_c_comments(bytes).contains("Color::Rgb"));
+        let plain = "let p = r\"C:\\\";\n// BorderType::Double\n";
+        assert!(!strip_c_comments(plain).contains("BorderType::Double"), "a raw string's backslash escapes nothing");
+    }
+
+    #[test]
+    fn test_paths_are_whole_segments_or_affixes() {
+        for exempt in ["src/tests/layout.rs", "src/layout_test.rs", "tests/ui.py", "ui.test.tsx", "src/__tests__/ui.tsx", "spec/ui.go", "src/test_ui.py", "ui.spec.ts", "test/ui.rs"] {
+            assert!(in_test_path(exempt), "{exempt}");
+        }
+        for scanned in ["src/latest.rs", "src/contest/ui.rs", "src/attestation.go", "src/testing_ui.rs", "tests/fixtures/antipatterns/terminal/x/x.rs"] {
+            assert!(!in_test_path(scanned), "{scanned}");
+        }
     }
 
     #[test]
@@ -901,11 +988,15 @@ mod tests {
     }
 
     #[test]
-    fn console_log_in_an_ink_component_is_flagged_unless_patch_console_is_used() {
-        let src = "import { Box } from 'ink';\nconsole.log('debug');\n";
-        assert_eq!(ids(&scan(src, Stack::Ink, Some(&ALL))), vec!["tui-print-in-loop"]);
-        let patched = "import { Box } from 'ink';\nimport patchConsole from 'patch-console';\nconsole.log('debug');\n";
-        assert!(scan(patched, Stack::Ink, Some(&ALL)).is_empty());
+    fn console_log_in_an_ink_component_is_flagged_only_when_patch_console_is_off() {
+        // Ink's default is `patchConsole: true`: console output is captured
+        // and re-rendered above the frame, so it is safe unless turned off.
+        let unpatched = "import { render, Text } from 'ink';\nconst App = () => {\n  console.log('debug');\n  return <Text>hi</Text>;\n};\nrender(<App/>, {patchConsole: false});\n";
+        let f = scan(unpatched, Stack::Ink, Some(&ALL));
+        assert_eq!(ids(&f), vec!["tui-print-in-loop"]);
+        assert_eq!(f[0].line, 3.0);
+        let default = "import { render, Text } from 'ink';\nconst App = () => {\n  console.log('debug');\n  return <Text>hi</Text>;\n};\nrender(<App/>);\n";
+        assert!(scan(default, Stack::Ink, Some(&ALL)).is_empty());
     }
 
     #[test]

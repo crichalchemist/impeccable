@@ -14,6 +14,7 @@
     }
   ],
   "files": {
+    ".impeccable/audit.ndjson": "{\"ts\":\"<ISO>\",\"event\":\"PostToolUse\",\"harness\":\"claude\",\"cwd\":\"<WS>\",\"session\":\"s1\",\"tool\":\"Edit\",\"file\":\"<WS>/src/theme.rs\",\"ext\":\".rs\",\"editCount\":1,\"findings\":1,\"freshFindings\":1,\"emitted\":true,\"freshFiles\":1,\"chars\": <N>,\"durationMs\": <MS>}\n{\"ts\":\"<ISO>\",\"event\":\"Stop\",\"harness\":\"claude\",\"cwd\":\"<WS>\",\"session\":\"s1\",\"scannedFiles\":1,\"preExistingFindings\":0,\"newFindings\":0,\"unknownFindings\":1,\"emitted\":false,\"skipped\":\"stop-clean\",\"durationMs\": <MS>}\n",
     ".impeccable/config.json": "{\"hook\":{\"advisoryRules\":\"include\"}}\n",
     ".impeccable/hook.cache.json": "{\"version\":1,\"sessions\":{\"s1\":{\"updatedAt\": <EPOCH>,\"files\":{\"<WS>/src/theme.rs\":{\"editCount\":1,\"findings\":[\"tui-hardcoded-rgb-no-adapt:3\"]}},\"footerShown\":true}}}"
   }

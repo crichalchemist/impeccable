@@ -57,7 +57,7 @@ export default function cases() {
   // the whole tree without the flag proves a web scan sees no tui- rule.
   const TERMINAL = `<REPO>/tests/fixtures/antipatterns/terminal`;
   const TERMINAL_RULES = fs.readdirSync(path.join(FIXTURES, 'terminal'), { withFileTypes: true })
-    .filter((e) => e.isDirectory()).map((e) => e.name).sort();
+    .filter((e) => e.isDirectory() && e.name.startsWith('tui-')).map((e) => e.name).sort();
   for (const rule of TERMINAL_RULES) {
     out.push({ id: `detect-terminal-${rule.replace(/^tui-/, '')}`, verb: 'detect', args: ['--no-config', '--json', '--platform', 'terminal', `${TERMINAL}/${rule}`], isolateHome: false });
   }
@@ -65,6 +65,10 @@ export default function cases() {
     { id: 'detect-terminal-gate-web', verb: 'detect', args: ['--no-config', '--json', TERMINAL], isolateHome: false },
     { id: 'detect-terminal-text-all', verb: 'detect', args: ['--no-config', '--platform', 'terminal', TERMINAL], isolateHome: false },
     { id: 'detect-terminal-single-file-advisory', verb: 'detect', args: ['--no-config', '--json', '--platform', 'terminal', `${TERMINAL}/tui-spinner-no-tty-guard/tui-spinner-no-tty-guard.py`], isolateHome: false },
+    // An explicit terminal-extension file on a web project still gets the
+    // web pipeline: the extension gate applies to the walker, not to a file
+    // argument.
+    { id: 'detect-terminal-explicit-py-web', verb: 'detect', args: ['--no-config', '--json', `${TERMINAL}/web-tell/app.py`], isolateHome: false },
     { id: 'detect-terminal-platform-invalid', verb: 'detect', args: ['--no-config', '--platform', 'nope', TERMINAL], isolateHome: false },
     { id: 'detect-terminal-product-json', verb: 'detect', workspace: 'detect-terminal-project', args: ['--no-config', '--json', 'src'] },
     { id: 'detect-terminal-product-text', verb: 'detect', workspace: 'detect-terminal-project', args: ['--no-config', 'src'] },

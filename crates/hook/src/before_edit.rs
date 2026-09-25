@@ -917,3 +917,38 @@ pub fn run(rt: &Runtime, stdin: &str, io: &mut impeccable_common::Io) -> i32 {
     io.out(&out.stdout);
     0
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    static NO_HTML: impeccable_detect::MissingHtmlEngine = impeccable_detect::MissingHtmlEngine;
+
+    fn write_rust_ui(platform: &str) -> Map<String, Value> {
+        let dir = std::env::temp_dir().join(format!("impeccable-before-edit-{}-{platform}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("PRODUCT.md"), format!("# P\n\n## Platform\n{platform}\n")).unwrap();
+        let root = dir.to_string_lossy().into_owned();
+        let rt = Runtime::new(root.clone(), HashMap::new(), "impeccable".into(), "impeccable", &NO_HTML);
+        let stdin = serde_json::json!({
+            "hook_event_name": "preToolUse", "conversation_id": "cv1", "workspace_roots": [root],
+            "tool_name": "Write",
+            "tool_input": { "path": "src/ui.rs", "content": "use ratatui::widgets::BorderType;\nlet b = BorderType::Double;\n" },
+        })
+        .to_string();
+        let audit = main_flow(&rt, &stdin).audit;
+        let _ = std::fs::remove_dir_all(&dir);
+        audit
+    }
+
+    #[test]
+    fn terminal_project_rust_edit_passes_the_extension_gate() {
+        let audit = write_rust_ui("terminal");
+        assert_eq!(audit.get("ext"), Some(&Value::from(".rs")), "{audit:?}");
+        assert_ne!(audit.get("skipped"), Some(&Value::from("extension")), "a terminal project must scan .rs before the edit: {audit:?}");
+        let audit = write_rust_ui("web");
+        assert_eq!(audit.get("skipped"), Some(&Value::from("extension")), "a web project still skips .rs: {audit:?}");
+    }
+}

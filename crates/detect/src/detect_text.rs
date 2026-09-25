@@ -1446,14 +1446,12 @@ pub fn detect_text(content: &str, file_path: &str, options: &TextOptions) -> Vec
     let mut findings: Vec<Finding> = Vec::new();
     let ext = ext_from_file_path(file_path);
     let terminal_project = options.platform == Some("terminal");
-    if TERMINAL_EXTENSIONS.contains(&ext.as_str()) {
-        // A terminal-only extension never enters the web pipeline: its
-        // matchers read markup and stylesheets. Off a terminal project the
-        // walker does not list these files and an explicit file argument
-        // scans to nothing.
-        if !terminal_project {
-            return Vec::new();
-        }
+    if terminal_project && TERMINAL_EXTENSIONS.contains(&ext.as_str()) {
+        // On a terminal project a terminal-only extension gets the terminal
+        // rules instead of the web pipeline. Off a terminal project the
+        // walker does not list these files, but an explicit file argument
+        // falls through to the web pipeline below, as it did before the
+        // terminal platform existed.
         let mut findings = terminal_findings(content, file_path, &ext, options, None);
         if let Some(pack) = options.rule_pack {
             findings.extend(pack.check_text(content, file_path, &ext));
