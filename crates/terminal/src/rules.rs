@@ -36,6 +36,7 @@ re!(
     KEY_HINT_RE,
     r"(?i)(?:^|[\s:|/,(\[<])(?:q|esc|enter|tab|space|ctrl|alt|shift|f\d{1,2}|[hjkl])(?:$|[\s:|/,)\]>])|[?↑↓←→⏎⌃⌘]|<[^>\s]{1,12}>|\[[^\]\s]{1,12}\]|\^[A-Z]"
 );
+re!(PAGER_PROMPT_RE, r"\(END\)|--More--|lines \d+-\d+");
 
 /// Every runtime rule over the frames of one target, in the frame policy
 /// spec section 5 fixes: size-invariant rules on the first frame, the spinner
@@ -147,14 +148,25 @@ pub fn rt_truecolor_on_256(frame: &Frame, file: &str) -> Vec<Finding> {
     Vec::new()
 }
 
+/// A pager's own prompt on the bottom row: exactly `:` once the trailing
+/// spaces `capture-pane -J` keeps are trimmed, or a row containing `(END)`,
+/// `--More--`, or `lines <n>-<m>`.
+fn is_pager_prompt(text: &str) -> bool {
+    text.trim_end() == ":" || PAGER_PROMPT_RE.is_match(text)
+}
+
 pub fn rt_no_key_hints(frame: &Frame, file: &str) -> Vec<Finding> {
     let non_blank: Vec<usize> = (0..frame.rows.len()).filter(|&r| !frame.is_blank(r)).collect();
     if non_blank.len() < MIN_ROWS_FOR_HINTS {
         return Vec::new();
     }
+    // A key named on the first row (a help line, a table header) counts too.
+    if KEY_HINT_RE.is_match(&frame.text(non_blank[0])) {
+        return Vec::new();
+    }
     let r = *non_blank.last().expect("checked above");
     let text = frame.text(r);
-    if KEY_HINT_RE.is_match(&text) {
+    if KEY_HINT_RE.is_match(&text) || is_pager_prompt(&text) {
         return Vec::new();
     }
     let shown: String = text.trim().chars().take(60).collect();
@@ -633,5 +645,24 @@ pub(crate) mod tests {
         assert_eq!(overflow_verdict(&f, 0), Overflow::Wrapped);
         assert!(rt_width_drift(&f, "x").is_empty());
         assert_eq!(overflow_verdict(&f, 1), Overflow::Fits);
+    }
+
+    #[test]
+    fn a_key_on_the_first_row_or_a_pager_prompt_at_the_bottom_silences_key_hints() {
+        let help_on_top = frame(80, &["q quit  / search  ? help", "NAME        SIZE", "a.txt       12K", "b.txt       40K"]);
+        assert!(rt_no_key_hints(&help_on_top, "x").is_empty(), "a screen whose first row names the keys");
+        for prompt in [":", ":                    ", "(END)", "--More--(42%)", "lines 1-24/200 12%", "README.md lines 25-48"] {
+            let pager = frame(80, &["NAME", "     less - opposite of more", "DESCRIPTION", prompt]);
+            assert!(rt_no_key_hints(&pager, "x").is_empty(), "pager prompt {prompt:?}");
+        }
+        // Rows captured from macOS top on a scratch server while planning.
+        let top = frame(100, &[
+            "Processes: 714 total, 2 running, 712 sleeping, 4442 threads                                14:22:30",
+            "Load Avg: 4.94, 5.73, 7.70  CPU usage: 13.12% user, 22.89% sys, 63.98% idle",
+            "87568  installd     0.0  00:00.21 2     1    59    1216K 0B    0B    87568 1     sleeping",
+        ]);
+        assert_eq!(rt_no_key_hints(&top, "x").len(), 1, "top names no key on its first row, so it still fires");
+        let colon_inside = frame(80, &["NAME", "     less - opposite of more", "DESCRIPTION", "Status: idle"]);
+        assert_eq!(rt_no_key_hints(&colon_inside, "x").len(), 1, "a colon inside text is not a prompt");
     }
 }
