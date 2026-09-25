@@ -1,0 +1,6 @@
+#!capture width=40 height=5
+┌──────────────────────────────────────┐
+│ Notes                                │
+└──────────────────────────────────────┘
+The quick brown fox jumps over the lazy dog while the index rebuilds in the background.
+ q quit  ? help

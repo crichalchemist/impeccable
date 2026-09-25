@@ -226,3 +226,13 @@ Error: cannot scan <REPO>/tests/fixtures/terminal-captures/does-not-exist.txt: E
 `detect-tmux-capture-with-files` exits 2, not 0: `tests/fixtures/antipatterns/blinking-cursor.html` carries a real (non-advisory) `pulsing-dot` finding, so the pre-existing exit-code contract (2 means primary findings present, `crates/detect/src/cli.rs`) applies same as any other scan with a primary finding. The HTML finding is listed first and the tmux advisory finding second, matching target order.
 
 Fixture note: `width-drift.txt` uses a 60-column pane, not 30. On a pane under 60 columns, `tui-rt-collapse-narrow`'s unconditional "a row wider than the pane" check (spec section 4) co-fires with `tui-rt-width-drift`'s wide-glyph overflow check on the same row, because both rules read the same cell count and neither excludes the other. Both rule implementations match their spec table text as written; this is not a rule defect. Widening the pane to 60 columns keeps `tui-rt-collapse-narrow` out of scope (`frames: capture frames under 60 columns`) while preserving both `tui-rt-width-drift` messages, so the fixture pins exactly `row measures 61 cells on a 60-column pane` and `border ends at column 58 while other rows end at 60`.
+
+## Recorded 2026-09-25: runtime engine hardening (spec PR 4)
+
+Three new captures come from the fixture loop in `cases/detect.mjs`: `detect-tmux-capture-collapse-narrow-prose` (a 40-column frame whose only overflow row is joined prose; `[]`), `detect-tmux-capture-width-drift-narrow` (a 40-column frame whose overflow is one emoji; one `tui-rt-width-drift`, no `tui-rt-collapse-narrow`), and `detect-tmux-capture-no-key-hints-pager` (less's bare `:` prompt with the trailing spaces `-J` keeps; `[]`).
+
+Case `detect-tmux-capture-spinner-never-rests` moved: the fixture gained a second recapture (frame 0 `⠋`, 700 ms `⠙`, 1000 ms `⠋`). The snippet is now `spinner glyph ⠋ became ⠙ between captures with no input` and the registry description says "across captures taken within one second".
+
+Cases `detect-tmux-capture-low-contrast` and `detect-tmux-capture-light-palette` moved: each finding gains `paletteRelative` after `cellCount`, true when the foreground or background is the terminal default or one of the 16 named colors. The spec's PR 4 Tests paragraph does not list these two; the change is the new extra only.
+
+No other golden moved: the width rules, the overflow verdict, and the key-hint exemptions leave the PR 3 fixtures' findings as they were.
