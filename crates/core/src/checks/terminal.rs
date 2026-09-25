@@ -543,6 +543,42 @@ re!(
 // coordinate, not the terminal.
 re!(CANVAS_RE, r"widgets::canvas\b");
 re!(SIZE_LITERAL_RE, r"\b(?:80|24)\b");
+re!(LAYOUT_CALL_RE, r"Layout::(?:vertical|horizontal|new)\(|\.constraints\(");
+
+/// The byte span of each layout call's argument list, from the opener's `(`
+/// to just past its matching `)`, or to the end of the text when the call is
+/// unbalanced. Only parens are counted; comments are already blanked and a
+/// paren inside a string literal is not special-cased. An opener that starts
+/// inside an earlier span belongs to that call.
+fn layout_call_spans(text: &str) -> Vec<(usize, usize)> {
+    let bytes = text.as_bytes();
+    let mut spans = Vec::new();
+    let mut covered = 0usize;
+    for m in LAYOUT_CALL_RE.find_iter(text) {
+        if m.start() < covered {
+            continue;
+        }
+        let open = m.end() - 1; // every alternative ends on the `(`
+        let mut depth = 0usize;
+        let mut end = text.len();
+        for (k, &b) in bytes.iter().enumerate().skip(open) {
+            match b {
+                b'(' => depth += 1,
+                b')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = k + 1;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        covered = end;
+        spans.push((open, end));
+    }
+    spans
+}
 
 /// Test code pins sizes on purpose (spec: "outside paths containing test").
 /// Only the file name and its parent directory are consulted, so a fixture
@@ -581,13 +617,15 @@ fn scan_terminal_hardcoded_size(lines: &[&str], file_path: &str) -> Vec<Finding>
         })
         .map(|(i, _)| hit("tui-hardcoded-size", file_path, lines, i))
         .collect();
-    let lengths: Vec<usize> = lines
-        .iter()
-        .enumerate()
-        .flat_map(|(i, l)| CONSTRAINT_LENGTH_RE.find_iter(l).map(move |_| i))
-        .collect();
-    if lengths.len() >= 2 && !lines.iter().any(|l| CONSTRAINT_FLEX_RE.is_match(l)) {
-        out.push(with_count(hit("tui-hardcoded-size", file_path, lines, lengths[0]), "lengthConstraints", lengths.len()));
+    // (b) Constraints are counted per layout call, so the two Lengths of a
+    // centered box or two one-Length layouts are not an all-Length layout.
+    for (start, end) in layout_call_spans(&text) {
+        let call = &text[start..end];
+        let lengths: Vec<usize> = CONSTRAINT_LENGTH_RE.find_iter(call).map(|m| start + m.start()).collect();
+        if lengths.len() >= 2 && !CONSTRAINT_FLEX_RE.is_match(call) {
+            let line = text[..lengths[0]].matches('\n').count();
+            out.push(with_count(hit("tui-hardcoded-size", file_path, lines, line), "lengthConstraints", lengths.len()));
+        }
     }
     out.sort_by(|a, b| a.line.partial_cmp(&b.line).unwrap_or(std::cmp::Ordering::Equal));
     out
@@ -1024,6 +1062,47 @@ mod tests {
         let f = scan(src, Stack::Ratatui, Some(&ALL));
         assert_eq!(ids(&f), vec!["tui-hardcoded-size"]);
         assert_eq!(f[0].line, 1.0);
+        assert_eq!(f[0].extras.get("lengthConstraints"), Some(&Value::from(2u64)));
+    }
+
+    #[test]
+    fn one_length_per_layout_call_is_not_an_all_length_layout() {
+        let src = "let top = Layout::vertical([Constraint::Length(1)]);\nlet side = Layout::horizontal([Constraint::Length(20)]);\n";
+        assert!(scan(src, Stack::Ratatui, Some(&ALL)).is_empty());
+        // The manual-pass false positive: two Lengths that size a centered box.
+        let centered = "let r = area.centered(Constraint::Length(w), Constraint::Length(h));\n";
+        assert!(scan(centered, Stack::Ratatui, Some(&ALL)).is_empty());
+    }
+
+    #[test]
+    fn a_rigid_layout_fires_even_when_another_call_is_flexible() {
+        let src = "let a = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]);\nlet b = Layout::default()\n    .direction(Direction::Horizontal)\n    .constraints([\n        Constraint::Length(10),\n        Constraint::Length(30),\n    ])\n    .split(area);\n";
+        let f = scan(src, Stack::Ratatui, Some(&ALL));
+        assert_eq!(ids(&f), vec!["tui-hardcoded-size"]);
+        assert_eq!(f[0].line, 5.0);
+        assert_eq!(f[0].extras.get("lengthConstraints"), Some(&Value::from(2u64)));
+    }
+
+    #[test]
+    fn every_layout_opener_is_walked_to_its_close_paren() {
+        let new = "let l = Layout::new(Direction::Vertical, [Constraint::Length(1), Constraint::Length(2)]);\n";
+        assert_eq!(ids(&scan(new, Stack::Ratatui, Some(&ALL))), vec!["tui-hardcoded-size"]);
+        // A nested .constraints( inside a Layout call is the same call, reported once.
+        let nested = "let l = Layout::new(d, base.constraints([Constraint::Length(1), Constraint::Length(2)]));\n";
+        assert_eq!(ids(&scan(nested, Stack::Ratatui, Some(&ALL))), vec!["tui-hardcoded-size"]);
+        // An unclosed call runs to the end of the file.
+        let open = "let l = Layout::vertical([\n    Constraint::Length(1),\n    Constraint::Length(2),\n";
+        let f = scan(open, Stack::Ratatui, Some(&ALL));
+        assert_eq!(ids(&f), vec!["tui-hardcoded-size"]);
+        assert_eq!(f[0].line, 2.0);
+    }
+
+    #[test]
+    fn a_rigid_layout_call_still_fires_in_a_file_that_measures_the_terminal() {
+        // Exemption (a) silences a bare 80/24 literal, not the Length count.
+        let src = "let (cols, _) = crossterm::terminal::size().unwrap_or((80, 24));\nlet l = Layout::vertical([Constraint::Length(3), Constraint::Length(10)]);\n";
+        let f = scan(src, Stack::Ratatui, Some(&ALL));
+        assert_eq!(ids(&f), vec!["tui-hardcoded-size"]);
         assert_eq!(f[0].extras.get("lengthConstraints"), Some(&Value::from(2u64)));
     }
 
