@@ -139,7 +139,7 @@ pub fn hide_window(cmd: &mut Command) {
 /// server). Windows registers a console control handler: Ctrl-C, Ctrl-Break,
 /// and console close all set the flag, matching what Node surfaces as
 /// SIGINT / SIGBREAK / SIGHUP there. Only one flag can be registered per
-/// process; later calls replace the earlier one.
+/// process; later calls replace the earlier one. [`clear_interrupt`] undoes it.
 pub fn on_interrupt(flag: &'static AtomicBool) {
     FLAG.store(
         flag as *const AtomicBool as *mut AtomicBool,
@@ -161,6 +161,24 @@ pub fn on_interrupt(flag: &'static AtomicBool) {
     unsafe {
         win::SetConsoleCtrlHandler(Some(win_ctrl_handler), 1);
     }
+}
+
+/// Undo [`on_interrupt`]: SIGINT and SIGTERM go back to their default
+/// disposition, so the next one terminates the process again, and the
+/// registered flag is forgotten. Windows removes the console control
+/// handler `on_interrupt` added. SIGPIPE stays ignored, which is the Rust
+/// runtime's own state before `main`.
+pub fn clear_interrupt() {
+    #[cfg(unix)]
+    unsafe {
+        libc::signal(libc::SIGINT, libc::SIG_DFL);
+        libc::signal(libc::SIGTERM, libc::SIG_DFL);
+    }
+    #[cfg(windows)]
+    unsafe {
+        win::SetConsoleCtrlHandler(Some(win_ctrl_handler), 0);
+    }
+    FLAG.store(std::ptr::null_mut(), std::sync::atomic::Ordering::SeqCst);
 }
 
 static FLAG: std::sync::atomic::AtomicPtr<AtomicBool> =
@@ -315,5 +333,22 @@ mod tests {
         detach(&mut cmd);
         let mut child = cmd.spawn().expect("detached spawn");
         let _ = child.wait();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_cleared_interrupt_hands_sigint_and_sigterm_back_to_their_defaults() {
+        static CAUGHT: AtomicBool = AtomicBool::new(false);
+        on_interrupt(&CAUGHT);
+        // raise() delivers to the calling thread before it returns.
+        unsafe { libc::raise(libc::SIGTERM) };
+        assert!(CAUGHT.load(std::sync::atomic::Ordering::SeqCst), "the registered flag caught SIGTERM");
+        clear_interrupt();
+        for sig in [libc::SIGINT, libc::SIGTERM] {
+            // signal() returns the disposition it replaces.
+            let previous = unsafe { libc::signal(sig, libc::SIG_DFL) };
+            assert_eq!(previous, libc::SIG_DFL, "signal {sig} is back to its default");
+        }
+        assert!(FLAG.load(std::sync::atomic::Ordering::SeqCst).is_null(), "no flag stays registered");
     }
 }
