@@ -97,9 +97,9 @@ impl Tmux {
     }
 
     /// tmux 3.7's `display-message -p -t <target>` does not fail on a
-    /// missing session or window (or a target that resolves to the wrong
-    /// pane) -- it exits 0 with empty `#{...}` fields -- so a `list-panes`
-    /// probe runs first to get a real, target-specific error.
+    /// missing session or window, or on a target that resolves to the wrong
+    /// pane. It exits 0 with empty `#{...}` fields. A `list-panes` probe
+    /// therefore runs first to get a real, target-specific error.
     pub fn pane_info(&self, target: &str) -> Result<PaneInfo, String> {
         self.run(&["list-panes", "-t", target, "-F", "#{pane_id}"])?;
         let out = self.run(&[
