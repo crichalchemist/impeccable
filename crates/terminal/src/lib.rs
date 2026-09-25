@@ -114,8 +114,9 @@ fn capture_sizes(
 
 /// The size pass and the restore that always follows it. When `interrupted`
 /// is set by the end, the interrupt names the failure whatever the pass
-/// returned (a terminal Ctrl-C can also fail the tmux call in flight). The
-/// restore never checks the flag.
+/// returned (on Windows, where the tmux child shares the terminal's process
+/// group, a Ctrl-C can also fail the tmux call in flight). The restore never
+/// checks the flag.
 #[allow(clippy::too_many_arguments)]
 fn size_pass(
     tmux: &Tmux,
