@@ -1,6 +1,6 @@
 Run systematic **technical** quality checks on a terminal app (`terminal`) and generate a comprehensive report. Don't fix issues; document them for other commands to address.
 
-This is a code-level audit, not a design critique. Audit from source (Ratatui, Bubble Tea and Lip Gloss, Textual and Rich, Ink) and from captures of the running app; no browser tooling applies. `{{scripts_path}}/impeccable detect` runs terminal rules once they ship; until then, the checks below are manual. Score against [terminal.md](terminal.md); read it before scoring if Setup hasn't already. The report skeleton mirrors [audit.md](audit.md); keep the variants in sync when changing it.
+This is a code-level audit, not a design critique. Audit from source (Ratatui, Bubble Tea and Lip Gloss, Textual and Rich, Ink) and from captures of the running app; no browser tooling applies. From the project root, run `{{scripts_path}}/impeccable detect --json <source directory>`; pass a directory, not single files, so the project signals (TTY guards, adaptive color helpers, icon fallbacks) are collected. Every `tui-` finding is advisory: confirm each one against the source before it enters the report. The checks below cover what detect cannot see. Score against [terminal.md](terminal.md); read it before scoring if Setup hasn't already. The report skeleton mirrors [audit.md](audit.md); keep the variants in sync when changing it.
 
 ## Diagnostic Scan
 

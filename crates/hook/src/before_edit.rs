@@ -753,6 +753,7 @@ fn main_flow(rt: &Runtime, stdin: &str) -> Out {
     }
 
     let config = read_config(&cwd);
+    let platform = resolve_project_platform(rt, &cwd);
     let ext_name = js::to_lower_case(&jsp::extname(&file_path));
     let configured = match_configured_extension(&file_path, &config.extensions);
     audit.insert(
@@ -763,7 +764,7 @@ fn main_flow(rt: &Runtime, stdin: &str) -> Out {
                 .unwrap_or_else(|| ext_name.clone()),
         ),
     );
-    if !ALLOWED_EXTS.contains(&ext_name.as_str()) && configured.is_none() {
+    if !allowed_exts(platform.as_deref()).contains(&ext_name.as_str()) && configured.is_none() {
         return skip(&audit, "extension");
     }
 
@@ -791,7 +792,6 @@ fn main_flow(rt: &Runtime, stdin: &str) -> Out {
     if !config.enabled {
         return skip(&audit, "config-disabled");
     }
-    let platform = resolve_project_platform(rt, &cwd);
     if is_native_platform(platform.as_deref()) {
         return allow(
             ext(
@@ -811,7 +811,8 @@ fn main_flow(rt: &Runtime, stdin: &str) -> Out {
     {
         return skip(&audit, "config-ignore-file");
     }
-    let scan = design_system_options_for_file(rt, &config, &cwd, &file_path);
+    let mut scan = design_system_options_for_file(rt, &config, &cwd, &file_path);
+    scan.platform = platform.clone();
     let use_html_engine = match configured {
         Some(c) => c.engine == "html",
         None => ext_name == ".html" || ext_name == ".htm",
@@ -915,4 +916,39 @@ pub fn run(rt: &Runtime, stdin: &str, io: &mut impeccable_common::Io) -> i32 {
     write_audit_log(rt, &out.audit, &rt.proc_cwd);
     io.out(&out.stdout);
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    static NO_HTML: impeccable_detect::MissingHtmlEngine = impeccable_detect::MissingHtmlEngine;
+
+    fn write_rust_ui(platform: &str) -> Map<String, Value> {
+        let dir = std::env::temp_dir().join(format!("impeccable-before-edit-{}-{platform}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("PRODUCT.md"), format!("# P\n\n## Platform\n{platform}\n")).unwrap();
+        let root = dir.to_string_lossy().into_owned();
+        let rt = Runtime::new(root.clone(), HashMap::new(), "impeccable".into(), "impeccable", &NO_HTML);
+        let stdin = serde_json::json!({
+            "hook_event_name": "preToolUse", "conversation_id": "cv1", "workspace_roots": [root],
+            "tool_name": "Write",
+            "tool_input": { "path": "src/ui.rs", "content": "use ratatui::widgets::BorderType;\nlet b = BorderType::Double;\n" },
+        })
+        .to_string();
+        let audit = main_flow(&rt, &stdin).audit;
+        let _ = std::fs::remove_dir_all(&dir);
+        audit
+    }
+
+    #[test]
+    fn terminal_project_rust_edit_passes_the_extension_gate() {
+        let audit = write_rust_ui("terminal");
+        assert_eq!(audit.get("ext"), Some(&Value::from(".rs")), "{audit:?}");
+        assert_ne!(audit.get("skipped"), Some(&Value::from("extension")), "a terminal project must scan .rs before the edit: {audit:?}");
+        let audit = write_rust_ui("web");
+        assert_eq!(audit.get("skipped"), Some(&Value::from("extension")), "a web project still skips .rs: {audit:?}");
+    }
 }

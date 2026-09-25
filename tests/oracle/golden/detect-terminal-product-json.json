@@ -1,0 +1,7 @@
+{
+  "stdout": "[\n  {\n    \"antipattern\": \"tui-double-border\",\n    \"name\": \"Double-line border\",\n    \"description\": \"Double-line box borders draw the eye to the frame instead of the content and stack badly when panels nest. Use a plain or rounded single border, and drop borders on inner panels.\",\n    \"severity\": \"advisory\",\n    \"category\": \"slop\",\n    \"file\": \"<WS>/src/main.rs\",\n    \"line\": 4,\n    \"snippet\": \"Block::default().border_type(BorderType::Double)\",\n    \"advisory\": true\n  },\n  {\n    \"antipattern\": \"tui-hardcoded-rgb-no-adapt\",\n    \"name\": \"Hardcoded truecolor without adaptation\",\n    \"description\": \"A literal RGB or hex color with no light/dark or NO_COLOR adaptation assumes one terminal theme. Use the 16 ANSI colors or an adaptive color helper.\",\n    \"severity\": \"advisory\",\n    \"category\": \"slop\",\n    \"file\": \"<WS>/src/theme.rs\",\n    \"line\": 3,\n    \"snippet\": \"pub const ACCENT: Color = Color::Rgb(255, 0, 128);\",\n    \"advisory\": true\n  }\n]\n",
+  "stderr": "",
+  "exit": 0,
+  "signal": null,
+  "files": {}
+}

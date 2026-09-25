@@ -6,10 +6,15 @@
 use impeccable_core::checks::css_scan::{
     scan_css_text_for_grid_background, scan_css_text_for_pseudo_stripe,
 };
+use impeccable_core::checks::terminal::{
+    classify_terminal_source, scan_terminal_source, strip_c_comments, strip_python_comments,
+    ProjectSignals, Stack, TERMINAL_EXTENSIONS,
+};
 use impeccable_core::findings::{finding, Finding};
 use impeccable_core::inline_ignores::apply_inline_ignores;
 use impeccable_core::js::{self, ci, number_to_string, string_to_number};
 use impeccable_core::page::is_full_page;
+use impeccable_core::registry::{get_antipattern, rule_runs_on_platform};
 use impeccable_core::rule_pack::RulePack;
 
 use crate::design_system::{check_source_design_system, DesignSystem};
@@ -29,6 +34,12 @@ pub struct TextOptions<'a> {
     pub inline_ignores: bool,
     /// An installed rule pack's text hook; `None` runs the built-ins only.
     pub rule_pack: Option<&'static dyn RulePack>,
+    /// The resolved platform. `Some("terminal")` turns the terminal source
+    /// rules on; anything else, including `None`, is the web rulebook only.
+    pub platform: Option<&'a str>,
+    /// Project signals the walker collected over a directory target;
+    /// `None` in a single-file scan (absence rules then carry a note).
+    pub signals: Option<&'a ProjectSignals>,
 }
 
 const PAGE_ANALYZER_EXTS: &[&str] = &[".html", ".htm", ".astro", ".vue", ".svelte"];
@@ -1398,11 +1409,59 @@ fn pseudo_stripe_findings(text: &str, file_path: &str, line_offset: usize) -> Ve
         .collect()
 }
 
+/// The terminal half of `detect_text`: per-file framework detection, the
+/// language's comment blanking, the `tui-` scans, and the registry platform
+/// filter (a `tui-` row never leaves this function on a non-terminal
+/// platform, whatever the scans return). Ink files hand in the JS-stripped
+/// text the web pipeline already computed so the two halves agree on lines.
+fn terminal_findings(
+    content: &str,
+    file_path: &str,
+    ext: &str,
+    options: &TextOptions,
+    js_stripped: Option<&str>,
+) -> Vec<Finding> {
+    let Some(stack) = classify_terminal_source(ext, content) else {
+        return Vec::new();
+    };
+    let stripped: String = match (stack, js_stripped) {
+        (Stack::Ink, Some(s)) => s.to_string(),
+        (Stack::Ink, None) => strip_js_comments(content, ext != ".ts"),
+        (Stack::Textual, _) => strip_python_comments(content),
+        (Stack::Ratatui | Stack::Charm | Stack::TextualCss, _) => strip_c_comments(content),
+    };
+    scan_terminal_source(&stripped, file_path, stack, options.signals)
+        .into_iter()
+        .filter(|f| {
+            get_antipattern(&f.antipattern)
+                .map(|ap| rule_runs_on_platform(ap, options.platform))
+                .unwrap_or(false)
+        })
+        .collect()
+}
+
 /// JS: detect-text.mjs#detectText
 pub fn detect_text(content: &str, file_path: &str, options: &TextOptions) -> Vec<Finding> {
     let profile = options.profile;
     let mut findings: Vec<Finding> = Vec::new();
     let ext = ext_from_file_path(file_path);
+    let terminal_project = options.platform == Some("terminal");
+    if terminal_project && TERMINAL_EXTENSIONS.contains(&ext.as_str()) {
+        // On a terminal project a terminal-only extension gets the terminal
+        // rules instead of the web pipeline. Off a terminal project the
+        // walker does not list these files, but an explicit file argument
+        // falls through to the web pipeline below, as it did before the
+        // terminal platform existed.
+        let mut findings = terminal_findings(content, file_path, &ext, options, None);
+        if let Some(pack) = options.rule_pack {
+            findings.extend(pack.check_text(content, file_path, &ext));
+        }
+        return if options.inline_ignores {
+            apply_inline_ignores(findings, Some(content))
+        } else {
+            findings
+        };
+    }
     let comment_stripped = if JS_SOURCE_EXTS.contains(&ext.as_str()) {
         strip_js_comments(content, ext == ".js" || ext == ".jsx" || ext == ".tsx")
     } else {
@@ -1556,6 +1615,13 @@ pub fn detect_text(content: &str, file_path: &str, options: &TextOptions) -> Vec
                 || analyzer(content, file_path),
             ));
         }
+    }
+
+    // Ink components are ordinary web-scannable files that also carry
+    // terminal rules on a terminal project; they land after the web findings
+    // so web output stays byte-identical everywhere else.
+    if terminal_project && JS_SOURCE_EXTS.contains(&ext.as_str()) {
+        deduped.extend(terminal_findings(content, file_path, &ext, options, Some(&comment_stripped)));
     }
 
     // A rule pack sees the file after every built-in matcher, analyzer, and

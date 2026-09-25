@@ -34,6 +34,12 @@ pub const SCANNABLE_EXTENSIONS: &[&str] = &[
 ];
 /// JS `HTML_EXTENSIONS`.
 pub const HTML_EXTENSIONS: &[&str] = &[".html", ".htm"];
+/// The extensions a terminal project adds to the walk (spec section 3).
+pub use impeccable_core::checks::terminal::TERMINAL_EXTENSIONS;
+/// Skipped only on a terminal project: Rust build output, Python virtualenvs,
+/// Go vendored modules. Web walks keep `SKIP_DIRS` byte-identical; the
+/// `detect-config` oracle workspace proves `ignoreFiles` on `src/vendor`.
+pub const TERMINAL_SKIP_DIRS: &[&str] = &["target", ".venv", "vendor"];
 
 /// JS: file-system.mjs#hasScannableExtension
 pub fn has_scannable_extension(filename: &str) -> bool {
@@ -49,6 +55,17 @@ pub fn has_scannable_extension(filename: &str) -> bool {
     false
 }
 
+/// `has_scannable_extension`, plus the terminal extensions when the resolved
+/// platform is `terminal`.
+pub fn has_scannable_extension_for(filename: &str, platform: Option<&str>) -> bool {
+    if has_scannable_extension(filename) {
+        return true;
+    }
+    platform == Some("terminal")
+        && TERMINAL_EXTENSIONS
+            .contains(&jsp::extname(&impeccable_core::js::to_lower_case(filename)).as_str())
+}
+
 /// `HTML_EXTENSIONS.has(path.extname(filePath).toLowerCase())`.
 pub fn is_html_path(file_path: &str) -> bool {
     HTML_EXTENSIONS.contains(&impeccable_core::js::to_lower_case(&jsp::extname(file_path)).as_str())
@@ -62,8 +79,9 @@ pub fn walk_dir(dir: &str) -> Vec<String> {
 
 /// JS: file-system.mjs#walkDir(dir, onReadError). An unreadable directory is
 /// reported and skipped rather than silently yielding nothing (#711).
-pub fn walk_dir_reporting(
+pub fn walk_dir_reporting_for(
     dir: &str,
+    platform: Option<&str>,
     on_read_error: &mut dyn FnMut(&str, &std::io::Error),
 ) -> Vec<String> {
     let mut files = Vec::new();
@@ -87,7 +105,9 @@ pub fn walk_dir_reporting(
     // which on macOS/Linux is sorted by name for the common filesystems.
     entries.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
     for (name, is_dir) in entries {
-        if SKIP_DIRS.contains(&name.as_str()) {
+        if SKIP_DIRS.contains(&name.as_str())
+            || (platform == Some("terminal") && TERMINAL_SKIP_DIRS.contains(&name.as_str()))
+        {
             continue;
         }
         if is_dir && name.starts_with('.') && !HIDDEN_SOURCE_DIRS.contains(&name.as_str()) {
@@ -95,12 +115,20 @@ pub fn walk_dir_reporting(
         }
         let full = jsp::join(&[dir, &name]);
         if is_dir {
-            files.extend(walk_dir_reporting(&full, on_read_error));
-        } else if has_scannable_extension(&name) {
+            files.extend(walk_dir_reporting_for(&full, platform, on_read_error));
+        } else if has_scannable_extension_for(&name, platform) {
             files.push(full);
         }
     }
     files
+}
+
+/// JS: file-system.mjs#walkDir(dir, onReadError), the web walk.
+pub fn walk_dir_reporting(
+    dir: &str,
+    on_read_error: &mut dyn FnMut(&str, &std::io::Error),
+) -> Vec<String> {
+    walk_dir_reporting_for(dir, None, on_read_error)
 }
 
 // ─── Import graph ────────────────────────────────────────────────────────────

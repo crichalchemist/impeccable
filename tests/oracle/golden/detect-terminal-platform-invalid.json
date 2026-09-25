@@ -1,0 +1,7 @@
+{
+  "stdout": "",
+  "stderr": "Error: --platform requires one of web, ios, android, adaptive, terminal\n",
+  "exit": 1,
+  "signal": null,
+  "files": {}
+}

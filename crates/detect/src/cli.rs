@@ -15,11 +15,13 @@ use crate::design_system::{load_design_system_for_target, DesignSystemCache};
 use crate::detect_text::{detect_text, TextOptions};
 use crate::engines::{EngineError, Engines, ScanOptions};
 use crate::file_system::{
-    build_import_graph_reporting, detect_framework_config, is_html_path, is_port_listening,
-    walk_dir_reporting,
+    build_import_graph_reporting, detect_framework_config, has_scannable_extension, is_html_path,
+    is_port_listening, walk_dir_reporting_for,
 };
 use crate::jsp;
 use crate::util::{exists, re, D};
+use impeccable_core::checks::terminal::ProjectSignals;
+use std::rc::Rc;
 
 pub const USAGE: &str = "Usage: impeccable detect [options] [file-or-dir-or-url...]
 
@@ -37,6 +39,7 @@ Options:
   --no-inline-ignores Do not honor in-file impeccable-disable* ignore comments
   --no-design-system  Do not load local DESIGN.md / .impeccable/design.json context
   --no-advisory       Suppress advisory findings entirely (e.g. em-dash overuse)
+  --platform <value>  Scan as web|ios|android|adaptive|terminal instead of reading PRODUCT.md
   --help              Show this help message
 
 Advisory findings:
@@ -299,6 +302,8 @@ impl<'a> Ctx<'a> {
                 design_system: options.design_system.as_deref(),
                 inline_ignores: options.inline_ignores,
                 rule_pack: options.rule_pack,
+                platform: options.platform.as_deref(),
+                signals: options.signals.as_deref(),
             },
         ))
     }
@@ -327,6 +332,8 @@ impl<'a> Ctx<'a> {
                 design_system: opts.design_system.as_deref(),
                 inline_ignores: opts.inline_ignores,
                 rule_pack: opts.rule_pack,
+                platform: opts.platform.as_deref(),
+                signals: opts.signals.as_deref(),
             },
         ))
     }
@@ -485,6 +492,38 @@ fn detect_cli(args_in: &[String], io: &mut Io, engines: &Engines) -> Result<i32,
             }
         }
     }
+    const PLATFORM_VALUES: &[&str] = &["web", "ios", "android", "adaptive", "terminal"];
+    let mut platform_flag: Option<String> = None;
+    let mut i = 0;
+    while i < args.len() {
+        let inline = args[i].starts_with("--platform=");
+        if args[i] != "--platform" && !inline {
+            i += 1;
+            continue;
+        }
+        let value: Option<String> = if inline {
+            Some(args[i]["--platform=".len()..].to_string())
+        } else {
+            args.get(i + 1).cloned()
+        };
+        match value {
+            Some(v) if PLATFORM_VALUES.contains(&v.as_str()) => platform_flag = Some(v),
+            _ => {
+                io.err("Error: --platform requires one of web, ios, android, adaptive, terminal\n");
+                return Err(Exit(1));
+            }
+        }
+        let n = if inline { 1 } else { 2 };
+        for _ in 0..n {
+            if i < args.len() {
+                args.remove(i);
+            }
+        }
+    }
+    // The flag wins; else the binary's PRODUCT.md resolver for the process
+    // cwd; else web. Resolved once per run, not per target (spec ruling 6).
+    let platform: Option<String> =
+        platform_flag.or_else(|| engines.platform.and_then(|resolve| resolve(&cwd)));
     let valid = rule_scopes();
     let unknown: Vec<&String> = scopes
         .iter()
@@ -510,6 +549,8 @@ fn detect_cli(args_in: &[String], io: &mut Io, engines: &Engines) -> Result<i32,
         // The `impeccable` binary installs no rule pack; a library caller that
         // does sets this before handing the options to an engine.
         rule_pack: None,
+        platform: platform.clone(),
+        signals: None,
     };
     let targets: Vec<String> = expand_joined_url_targets(
         args.iter()
@@ -734,14 +775,29 @@ fn scan_targets(
             // Unreadable directories and files are reported, not silently
             // skipped, and each one forces exit 1 (#711).
             let mut walk_failures: Vec<(String, String)> = Vec::new();
-            let files: Vec<String> = walk_dir_reporting(&resolved, &mut |dir, err| {
-                walk_failures.push((dir.to_string(), node_scan_error(dir, err)));
-            })
-            .into_iter()
-            .filter(|f| !should_ignore_detection_file(f, &cwd, &ctx.config))
-            .collect();
+            let files: Vec<String> =
+                walk_dir_reporting_for(&resolved, ctx.base.platform.as_deref(), &mut |dir, err| {
+                    walk_failures.push((dir.to_string(), node_scan_error(dir, err)));
+                })
+                .into_iter()
+                .filter(|f| !should_ignore_detection_file(f, &cwd, &ctx.config))
+                .collect();
             for (dir, message) in walk_failures {
                 ctx.report_local_scan_failure(&dir, &message);
+            }
+            let terminal_project = ctx.base.platform.as_deref() == Some("terminal");
+            if terminal_project {
+                // Spec section 3 "Project signals": one pass over every
+                // scanned file before the rules run, so the absence rules can
+                // decide instead of noting. Read failures surface below when
+                // the file is scanned.
+                let mut signals = ProjectSignals::default();
+                for f in &files {
+                    if let Some(text) = crate::util::read_text(f) {
+                        signals.absorb(&text);
+                    }
+                }
+                ctx.base.signals = Some(Rc::new(signals));
             }
             let html_count = files.iter().filter(|f| is_html_path(f)).count();
             if files.len() > 50 && ctx.stdin_tty && !ctx.json_mode && !ctx.quiet_mode {
@@ -759,7 +815,13 @@ fn scan_targets(
             }
             let mut unreadable_files: Vec<String> = Vec::new();
             let mut read_failures: Vec<(String, String)> = Vec::new();
-            let graph = build_import_graph_reporting(&files, &mut |file, err| {
+            // The import graph is a web concern; terminal source stays out of it.
+            let web_files: Vec<String> = files
+                .iter()
+                .filter(|f| has_scannable_extension(f))
+                .cloned()
+                .collect();
+            let graph = build_import_graph_reporting(&web_files, &mut |file, err| {
                 unreadable_files.push(file.to_string());
                 read_failures.push((file.to_string(), node_scan_error(file, err)));
             });
@@ -805,6 +867,7 @@ fn scan_targets(
                 }
                 all.extend(file_findings);
             }
+            ctx.base.signals = None;
         } else if stat.is_file() {
             let cwd = ctx.cwd.clone();
             if should_ignore_detection_file(&resolved, &cwd, &ctx.config) {
@@ -846,5 +909,80 @@ fn stderr_is_tty() -> bool {
     #[cfg(not(unix))]
     {
         std::io::IsTerminal::is_terminal(&std::io::stderr())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engines::{Engines, MissingHtmlEngine};
+    use std::collections::HashMap;
+
+    fn engines(platform: Option<&'static dyn Fn(&str) -> Option<String>>) -> Engines<'static> {
+        static HTML: MissingHtmlEngine = MissingHtmlEngine;
+        Engines { html: &HTML, url: None, platform }
+    }
+
+    fn project(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("impeccable-detect-platform-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/ui.rs"), "use ratatui::widgets::BorderType;\nlet b = BorderType::Double;\n").unwrap();
+        std::fs::write(dir.join("src/util.rs"), "let c = Color::Rgb(1, 2, 3); // names no framework, never scanned\n").unwrap();
+        dir
+    }
+
+    fn run(dir: &std::path::Path, args: &[&str], engines: &Engines) -> (i32, String, String) {
+        let (mut io, cap) = Io::captured("", dir.to_path_buf(), HashMap::new());
+        let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+        let code = run_detect(&args, &mut io, engines);
+        let out = String::from_utf8(cap.stdout.borrow().clone()).unwrap();
+        let err = String::from_utf8(cap.stderr.borrow().clone()).unwrap();
+        (code, out, err)
+    }
+
+    #[test]
+    fn platform_flag_turns_terminal_rules_on_for_a_directory() {
+        let dir = project("flag");
+        let (code, out, _) = run(&dir, &["--no-config", "--json", "--platform", "terminal", "src"], &engines(None));
+        assert_eq!(code, 0, "advisory findings never fail the run");
+        assert!(out.contains("\"tui-double-border\""), "{out}");
+        assert!(!out.contains("tui-hardcoded-rgb"), "util.rs names no framework: {out}");
+        let (_, out, _) = run(&dir, &["--no-config", "--json", "src"], &engines(None));
+        assert_eq!(out.trim(), "[]", "web by default: {out}");
+    }
+
+    #[test]
+    fn resolver_supplies_the_platform_when_no_flag_is_given() {
+        let dir = project("resolver");
+        fn terminal(_cwd: &str) -> Option<String> {
+            Some("terminal".into())
+        }
+        static RESOLVE: fn(&str) -> Option<String> = terminal;
+        let (_, out, _) = run(&dir, &["--no-config", "--json", "src"], &engines(Some(&RESOLVE)));
+        assert!(out.contains("\"tui-double-border\""), "{out}");
+        let (_, out, _) = run(&dir, &["--no-config", "--json", "--platform=web", "src"], &engines(Some(&RESOLVE)));
+        assert_eq!(out.trim(), "[]", "the flag wins over the resolver: {out}");
+    }
+
+    #[test]
+    fn invalid_platform_value_is_an_error() {
+        let dir = project("invalid");
+        let (code, _, err) = run(&dir, &["--no-config", "--platform", "nope", "src"], &engines(None));
+        assert_eq!(code, 1);
+        assert_eq!(err, "Error: --platform requires one of web, ios, android, adaptive, terminal\n");
+    }
+
+    #[test]
+    fn directory_scan_collects_signals_and_a_single_file_does_not() {
+        let dir = project("signals");
+        std::fs::write(dir.join("src/theme.rs"), "use ratatui::style::Color;\nlet c = Color::Rgb(9, 9, 9);\n").unwrap();
+        std::fs::write(dir.join("src/main.rs"), "use ratatui::prelude::*;\nfn main() { if std::io::stdout().is_terminal() {} }\n").unwrap();
+        let (_, out, _) = run(&dir, &["--no-config", "--json", "--platform", "terminal", "src"], &engines(None));
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let rgb = v.as_array().unwrap().iter().find(|f| f["antipattern"] == "tui-hardcoded-rgb-no-adapt").expect("rgb finding");
+        assert!(rgb.get("note").is_none(), "a directory scan decides from signals: {rgb}");
+        let (_, out, _) = run(&dir, &["--no-config", "--json", "--platform", "terminal", "src/theme.rs"], &engines(None));
+        assert!(out.contains("project signals were not collected"), "{out}");
     }
 }

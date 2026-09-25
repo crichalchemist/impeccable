@@ -36,7 +36,8 @@ crates/
                ignores, the Dom trait, SnapshotDom, and the plain-data types
                every check takes in and hands back
   core         the rule logic: every `check_*` / `scan_*` and its heuristics,
-               the browser rule adapters, the visual-contrast decisions
+               the browser rule adapters, the visual-contrast decisions,
+               checks/terminal.rs (terminal source rules, platform-gated)
   wasm         wasm-bindgen exports over `core` (the in-page bundle and the
                extension's offscreen core)
   bundle       the page JS plus the bundler: in-page bundle, extension
@@ -175,7 +176,10 @@ Where each hook runs, and why there:
   and CSS-in-JS pass, the design-system scan, the dedupe, and the page
   analyzers, and before inline ignores. Appending last keeps built-in output
   identical, and being inside the waiver step means `impeccable-disable`
-  covers a pack's rules the same way it covers built-in ones.
+  covers a pack's rules the same way it covers built-in ones. On a terminal
+  project the `tui-` scans run after the dedupe and before the pack hook for
+  Ink files, and alone, then the pack hook, then inline ignores, for
+  terminal-only extensions.
 - **Static HTML engine** (`detect_html_source`): after the element rules, the
   design-system merge, the page-level checks and the pattern checks, again
   just before inline ignores. An HTML file gets exactly one pack pass:

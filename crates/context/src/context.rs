@@ -1122,6 +1122,18 @@ pub fn extract_platform(product: Option<&str>) -> Option<String> {
     None
 }
 
+/// JS: resolveProjectPlatform(cwd): `extractPlatform(loadContext(cwd).product)`.
+/// The one PRODUCT.md platform lookup the hook and `impeccable detect`
+/// share. Only the platform is observable, so it skips loadContext's brief
+/// and visual-implementation work. `None` means no PRODUCT.md or no
+/// `## Platform`, which every caller treats as web.
+pub fn resolve_project_platform(cwd: &str, env: &Env) -> Option<String> {
+    let options = crate::target_args::TargetOptions::default();
+    let resolved = resolve_context(cwd, &options, env);
+    let product = resolved.product_path.as_deref().and_then(safe_read);
+    extract_platform(product.as_deref())
+}
+
 // ─── hasVisualImplementation ───────────────────────────────────────────────
 
 static RE_BLOCK_COMMENT: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?s)/\*.*?\*/").unwrap());
@@ -1290,5 +1302,24 @@ mod platform_tests {
     fn tui_and_cli_are_not_aliases() {
         assert_eq!(extract_platform(Some(&product("tui"))), None);
         assert_eq!(extract_platform(Some(&product("cli"))), None);
+    }
+
+    #[test]
+    fn platform_survives_invalid_utf8_in_product_md() {
+        // A PRODUCT.md with a stray invalid byte elsewhere in the file must
+        // not sink the whole read to None: the hook's resolver reads with
+        // the lossy `safe_read`, and `resolve_project_platform` has to match
+        // it byte-for-byte, not fall back to strict UTF-8.
+        let dir = std::env::temp_dir()
+            .join(format!("impeccable-context-platform-utf8-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut bytes = product("terminal").into_bytes();
+        bytes.push(0xFF);
+        std::fs::write(dir.join("PRODUCT.md"), &bytes).unwrap();
+        let cwd = dir.to_string_lossy().into_owned();
+        let result = super::resolve_project_platform(&cwd, &std::collections::HashMap::new());
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(result.as_deref(), Some("terminal"));
     }
 }

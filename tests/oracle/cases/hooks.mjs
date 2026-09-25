@@ -158,6 +158,54 @@ export default [
     ],
   },
 
+  // --- terminal platform (spec PR 2): the hook stays on and admits terminal source.
+  // Every tui- rule is advisory, so findings reach stdout only when the
+  // project includes advisory rules; the audit proves the scan ran either way.
+  { id: 'hook-terminal-platform-edit-rs', verb: 'hook', workspace: 'detect-terminal-project', stdin: claudeEdit('src/main.rs'), env: { IMPECCABLE_HOOK_LOG: `${WS}/.impeccable/audit.ndjson` }, files: CACHE_FILES },
+  {
+    id: 'hook-terminal-platform-edit-rs-advisory-included', verb: 'hook', workspace: 'detect-terminal-project', files: CACHE_FILES,
+    setup(ws) {
+      fs.mkdirSync(`${ws}/.impeccable`, { recursive: true });
+      fs.writeFileSync(`${ws}/.impeccable/config.json`, JSON.stringify({ hook: { advisoryRules: 'include' } }) + '\n');
+    },
+    stdin: claudeEdit('src/main.rs'),
+  },
+  {
+    id: 'hook-terminal-platform-stop', workspace: 'detect-terminal-project', files: CACHE_FILES,
+    env: { IMPECCABLE_HOOK_LOG: `${WS}/.impeccable/audit.ndjson` },
+    setup(ws) {
+      fs.mkdirSync(`${ws}/.impeccable`, { recursive: true });
+      fs.writeFileSync(`${ws}/.impeccable/config.json`, JSON.stringify({ hook: { advisoryRules: 'include' } }) + '\n');
+    },
+    steps: [
+      { verb: 'hook', stdin: claudeEdit('src/theme.rs') },
+      { verb: 'hook', stdin: stop() },
+    ],
+  },
+  // The Stop pass is the first surface: the session cache lists src/theme.rs
+  // as touched but remembers no findings, so the Stop deep pass itself must
+  // scan the .rs file and report the tui- finding.
+  {
+    id: 'hook-terminal-platform-stop-fresh', workspace: 'detect-terminal-project', files: CACHE_FILES,
+    env: { IMPECCABLE_HOOK_LOG: `${WS}/.impeccable/audit.ndjson` },
+    setup(ws) {
+      fs.mkdirSync(`${ws}/.impeccable`, { recursive: true });
+      fs.writeFileSync(`${ws}/.impeccable/config.json`, JSON.stringify({ hook: { advisoryRules: 'include' } }) + '\n');
+      fs.writeFileSync(`${ws}/.impeccable/hook.cache.json`, JSON.stringify({
+        version: 1,
+        sessions: { s1: { updatedAt: Date.now(), files: { [`${ws}/src/theme.rs`]: { editCount: 1 } } } },
+      }));
+    },
+    steps: [
+      { verb: 'hook', stdin: stop() },
+    ],
+  },
+  {
+    id: 'hook-web-platform-skips-rs', verb: 'hook', workspace: 'hook-project', files: CACHE_FILES,
+    setup(ws) { fs.writeFileSync(`${ws}/src/ui.rs`, 'use ratatui::widgets::BorderType;\nlet b = BorderType::Double;\n'); },
+    stdin: claudeEdit('src/ui.rs'), env: { IMPECCABLE_HOOK_LOG: `${WS}/.impeccable/audit.ndjson` },
+  },
+
   // --- hook-before-edit.mjs (Cursor) ---
   { id: 'hbe-write-with-findings', verb: 'hook-before-edit', workspace: 'hook-project', stdin: { hook_event_name: 'preToolUse', conversation_id: 'cv1', workspace_roots: [WS], tool_name: 'Write', tool_input: { path: 'src/new.css', content: '.t { background: linear-gradient(90deg,#f00,#00f); -webkit-background-clip: text; color: transparent; }\n' } }, files: CACHE_FILES },
   { id: 'hbe-write-clean', verb: 'hook-before-edit', workspace: 'hook-project', stdin: { hook_event_name: 'preToolUse', conversation_id: 'cv1', workspace_roots: [WS], tool_name: 'Write', tool_input: { path: 'src/new.css', content: '.t { color: #111; }\n' } }, files: CACHE_FILES },
@@ -183,6 +231,10 @@ export default [
     id: 'hbe-native-platform', verb: 'hook-before-edit', workspace: 'hook-project',
     setup: (ws) => fs.writeFileSync(`${ws}/PRODUCT.md`, '# P\n\n## Platform\nandroid\n'),
     stdin: { hook_event_name: 'preToolUse', conversation_id: 'cv1', workspace_roots: [WS], tool_name: 'Write', tool_input: { path: 'src/new.css', content: '.t { background: linear-gradient(90deg,#f00,#00f); -webkit-background-clip: text; color: transparent; }\n' } }, files: CACHE_FILES,
+  },
+  {
+    id: 'hook-before-edit-terminal-rs', verb: 'hook-before-edit', workspace: 'detect-terminal-project',
+    stdin: { hook_event_name: 'preToolUse', conversation_id: 'cv1', workspace_roots: [WS], tool_name: 'Write', tool_input: { path: 'src/main.rs', content: 'use ratatui::widgets::BorderType;\nlet b = BorderType::Double;\n' } }, files: CACHE_FILES,
   },
 
   // --- hook-admin.mjs ---

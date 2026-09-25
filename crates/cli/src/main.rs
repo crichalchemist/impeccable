@@ -111,17 +111,25 @@ fn run(args: &[String], io: &mut Io) -> i32 {
 pub const CLI_VERSION: &str = "4.0.0";
 
 /// The engines wired into `impeccable detect`: the static HTML engine
-/// (crates/html). The browser engine (crates/browser) plugs in here once it
-/// lands; until then URL scans report the puppeteer message.
+/// (crates/html), the browser engine (crates/browser), and the PRODUCT.md
+/// platform resolver `detect` cannot own (it never depends on crates/context;
+/// the hook resolves through the same function).
 fn engines() -> impeccable_detect::Engines<'static> {
     static HTML: impeccable_html::StaticHtmlEngine = impeccable_html::StaticHtmlEngine {
         // The shipped binary carries the built-in rules only.
         static_rule_pack: None,
     };
+    static RESOLVE: fn(&str) -> Option<String> = resolve_platform;
     impeccable_detect::Engines {
         html: &HTML,
         url: Some(url_engine()),
+        platform: Some(&RESOLVE),
     }
+}
+
+fn resolve_platform(cwd: &str) -> Option<String> {
+    let env: std::collections::HashMap<String, String> = std::env::vars().collect();
+    impeccable_context::context::resolve_project_platform(cwd, &env)
 }
 
 // --- browser engine (crates/browser) -------------------------------------

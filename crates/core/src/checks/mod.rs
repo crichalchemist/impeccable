@@ -44,6 +44,7 @@ pub mod html_patterns;
 pub mod measures;
 pub mod rules;
 pub mod text_rules;
+pub mod terminal;
 
 #[cfg(feature = "vectors")]
 pub mod vectors_a;

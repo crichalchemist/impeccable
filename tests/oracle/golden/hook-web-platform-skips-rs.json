@@ -1,0 +1,9 @@
+{
+  "stdout": "",
+  "stderr": "",
+  "exit": 0,
+  "signal": null,
+  "files": {
+    ".impeccable/audit.ndjson": "{\"ts\":\"<ISO>\",\"event\":\"PostToolUse\",\"harness\":\"claude\",\"cwd\":\"<WS>\",\"session\":\"s1\",\"tool\":\"Edit\",\"file\":\"<WS>/src/ui.rs\",\"ext\":\".rs\",\"skipped\":\"extension\",\"durationMs\": <MS>}\n"
+  }
+}
