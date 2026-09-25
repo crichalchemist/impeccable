@@ -456,7 +456,10 @@ fn scan_terminal_hardcoded_rgb(
 }
 
 // ─── tui-spinner-no-tty-guard ───────────────────────────────────────────────
-re!(SPINNER_RE, r"ink-spinner|\bora\(|rich\.spinner|bubbles/(?:v\d+/)?spinner|briandowns/spinner");
+// Only Bubbles' spinner: ora, Rich, briandowns/spinner, and Ink's renderer
+// all stop animating off a TTY on their own. Matches the github.com and the
+// charm.land v2 module paths.
+re!(SPINNER_RE, r"bubbles/(?:v\d+/)?spinner");
 
 fn scan_terminal_spinner(lines: &[&str], file_path: &str, signals: Option<&ProjectSignals>) -> Vec<Finding> {
     if matches!(signals, Some(s) if s.has_tty_guard) {
@@ -853,11 +856,28 @@ mod tests {
 
     #[test]
     fn spinner_without_tty_guard_is_flagged_and_a_guard_silences_it() {
-        let src = "import Spinner from 'ink-spinner';\n";
-        assert_eq!(ids(&scan(src, Stack::Ink, Some(&NONE))), vec!["tui-spinner-no-tty-guard"]);
-        assert!(scan(src, Stack::Ink, Some(&ALL)).is_empty());
+        let src = "import \"github.com/charmbracelet/bubbles/spinner\"\n";
+        assert_eq!(ids(&scan(src, Stack::Charm, Some(&NONE))), vec!["tui-spinner-no-tty-guard"]);
+        assert!(scan(src, Stack::Charm, Some(&ALL)).is_empty());
         assert!(scan("s := spinner.New()\n", Stack::Charm, Some(&NONE)).is_empty(), "the import path is what counts");
-        assert_eq!(ids(&scan("import \"github.com/charmbracelet/bubbles/spinner\"\n", Stack::Charm, Some(&NONE))), vec!["tui-spinner-no-tty-guard"]);
+        let v2 = "import \"github.com/charmbracelet/bubbles/v2/spinner\"\n";
+        assert_eq!(ids(&scan(v2, Stack::Charm, Some(&NONE))), vec!["tui-spinner-no-tty-guard"]);
+    }
+
+    #[test]
+    fn self_guarding_spinner_libraries_are_not_flagged() {
+        // Each of these stops animating when output is not a terminal:
+        // ora (isEnabled), Rich (Live refreshes only on a terminal console),
+        // briandowns/spinner (Start is a no-op off a terminal), and Ink's
+        // renderer (non-interactive in CI or without a TTY).
+        for (src, stack) in [
+            ("import Spinner from 'ink-spinner';\n", Stack::Ink),
+            ("const s = ora('Loading').start();\n", Stack::Ink),
+            ("from rich.spinner import Spinner\n", Stack::Textual),
+            ("import \"github.com/briandowns/spinner\"\n", Stack::Charm),
+        ] {
+            assert!(scan(src, stack, Some(&NONE)).is_empty(), "{src}");
+        }
     }
 
     #[test]
@@ -938,8 +958,9 @@ mod tests {
 
     #[test]
     fn single_file_scan_downgrades_absence_rules() {
-        let src = "import Spinner from 'ink-spinner';\nconst c = <Text color=\"#ff0080\">{title.slice(0, 8) + '...'}</Text>;\nconst i = \"\u{e0a0}\";\n";
-        let f = scan(src, Stack::Ink, None);
+        let src = "const c = <Text color=\"#ff0080\">{title.slice(0, 8) + '...'}</Text>;\nconst i = \"\u{e0a0}\";\n";
+        let mut f = scan(src, Stack::Ink, None);
+        f.extend(scan("import \"github.com/charmbracelet/bubbles/spinner\"\n", Stack::Charm, None));
         let noted: Vec<&str> = f.iter().filter(|f| f.extras.get("note") == Some(&Value::String(SIGNALS_NOTE.into()))).map(|f| f.antipattern.as_str()).collect();
         for id in ["tui-spinner-no-tty-guard", "tui-hardcoded-rgb-no-adapt", "tui-grapheme-unsafe-truncate", "tui-nerd-glyph-no-fallback"] {
             assert!(noted.contains(&id), "{id} should carry the note: {f:?}");
