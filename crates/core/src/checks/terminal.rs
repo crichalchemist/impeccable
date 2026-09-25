@@ -380,8 +380,51 @@ const EMOJI_FILE_THRESHOLD: usize = 8;
 const CANONICAL_EMOJI_THRESHOLD: usize = 3;
 const CANONICAL_EMOJI: &[char] = &['🚀', '✅', '❌', '⚠', '✨', '🎉', '📦', '🔧', '🔥', '💡'];
 
-fn is_emoji(c: char) -> bool {
-    matches!(c, '\u{1F300}'..='\u{1FAFF}' | '\u{2600}'..='\u{27BF}')
+/// U+2600 to U+27BF codepoints with the Unicode Emoji_Presentation property
+/// (emoji-data.txt, Unicode 16.0.0; the subset is unchanged in 17.0.0).
+/// The rest of that range (✓ ✗ ★ ☐ ➜) is a one-cell text glyph by default.
+fn has_emoji_presentation(c: char) -> bool {
+    matches!(
+        c,
+        '\u{2614}'..='\u{2615}'
+            | '\u{2648}'..='\u{2653}'
+            | '\u{267F}'
+            | '\u{2693}'
+            | '\u{26A1}'
+            | '\u{26AA}'..='\u{26AB}'
+            | '\u{26BD}'..='\u{26BE}'
+            | '\u{26C4}'..='\u{26C5}'
+            | '\u{26CE}'
+            | '\u{26D4}'
+            | '\u{26EA}'
+            | '\u{26F2}'..='\u{26F3}'
+            | '\u{26F5}'
+            | '\u{26FA}'
+            | '\u{26FD}'
+            | '\u{2705}'
+            | '\u{270A}'..='\u{270B}'
+            | '\u{2728}'
+            | '\u{274C}'
+            | '\u{274E}'
+            | '\u{2753}'..='\u{2755}'
+            | '\u{2757}'
+            | '\u{2795}'..='\u{2797}'
+            | '\u{27B0}'
+            | '\u{27BF}'
+    )
+}
+
+/// Spec section 7, PR 5: U+1F300 to U+1FAFF always count. A codepoint in
+/// U+2600 to U+27BF counts only with default emoji presentation, a following
+/// U+FE0F, or membership in the canonical set.
+fn counts_as_emoji(c: char, next: Option<char>) -> bool {
+    match c {
+        '\u{1F300}'..='\u{1FAFF}' => true,
+        '\u{2600}'..='\u{27BF}' => {
+            has_emoji_presentation(c) || next == Some('\u{FE0F}') || CANONICAL_EMOJI.contains(&c)
+        }
+        _ => false,
+    }
 }
 
 fn scan_terminal_emoji_density(lines: &[&str], file_path: &str) -> Vec<Finding> {
@@ -389,7 +432,11 @@ fn scan_terminal_emoji_density(lines: &[&str], file_path: &str) -> Vec<Finding> 
     let mut canonical = 0usize;
     let mut first: Option<usize> = None;
     for (i, l) in lines.iter().enumerate() {
-        for c in l.chars().filter(|c| is_emoji(*c)) {
+        let chars: Vec<char> = l.chars().collect();
+        for (k, &c) in chars.iter().enumerate() {
+            if !counts_as_emoji(c, chars.get(k + 1).copied()) {
+                continue;
+            }
             total += 1;
             if CANONICAL_EMOJI.contains(&c) {
                 canonical += 1;
@@ -816,6 +863,36 @@ mod tests {
         assert_eq!(ids(&scan(canonical, Stack::Textual, Some(&ALL))), vec!["tui-emoji-density"]);
         let few = "print(\"🚀 start\")\nprint(\"done\")\n";
         assert!(scan(few, Stack::Textual, Some(&ALL)).is_empty());
+    }
+
+    #[test]
+    fn text_presentation_dingbats_do_not_count_as_emoji() {
+        // Eight glyphs from U+2600 to U+27BF without Emoji_Presentation:
+        // ordinary one-cell TUI marks, not emoji.
+        let marks = "let m = [\"✓\", \"✗\", \"★\", \"☐\", \"➜\", \"☆\", \"✔\", \"✘\"];\n";
+        assert!(scan(marks, Stack::Ratatui, Some(&ALL)).is_empty());
+        // Four with Emoji_Presentation, and four made emoji by U+FE0F.
+        let shown = "let m = [\"☔\", \"☕\", \"⚡\", \"⛔\", \"❤\u{FE0F}\", \"☀\u{FE0F}\", \"✔\u{FE0F}\", \"✓\u{FE0F}\"];\n";
+        let f = scan(shown, Stack::Ratatui, Some(&ALL));
+        assert_eq!(ids(&f), vec!["tui-emoji-density"]);
+        assert_eq!(f[0].extras.get("emojiCount"), Some(&Value::from(8u64)));
+    }
+
+    #[test]
+    fn canonical_warning_sign_counts_without_a_variation_selector() {
+        // ⚠ (U+26A0) lacks Emoji_Presentation but is in the canonical set.
+        let src = "print(\"⚠ retry\")\nprint(\"✅ done\")\nprint(\"❌ failed\")\n";
+        assert_eq!(ids(&scan(src, Stack::Textual, Some(&ALL))), vec!["tui-emoji-density"]);
+    }
+
+    #[test]
+    fn eight_emoji_reach_the_threshold_and_seven_do_not() {
+        let seven = "let s = \"🌀 🌁 🌂 🌃 🌄 🌅 🌆\";\n";
+        assert!(scan(seven, Stack::Ratatui, Some(&ALL)).is_empty());
+        let eight = "let s = \"🌀 🌁 🌂 🌃 🌄 🌅 🌆 🌇\";\n";
+        let f = scan(eight, Stack::Ratatui, Some(&ALL));
+        assert_eq!(ids(&f), vec!["tui-emoji-density"]);
+        assert_eq!(f[0].extras.get("emojiCount"), Some(&Value::from(8u64)));
     }
 
     #[test]
