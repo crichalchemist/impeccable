@@ -588,87 +588,24 @@ fn scan_terminal_nerd_glyph(lines: &[&str], file_path: &str, signals: Option<&Pr
 }
 
 // ─── tui-print-in-loop ──────────────────────────────────────────────────────
-re!(
-    TEXTUAL_CLASS_RE,
-    r"^[ \t]*class[ \t]+\w+\([^)]*\b(?:App|Widget|Screen|ModalScreen|Static|Container)\b"
-);
-re!(PY_DEF_RE, r"^[ \t]*(?:async[ \t]+)?def[ \t]+\w+");
-re!(PY_PRINT_RE, r"(?:^|[^.\w])print\(");
 re!(INK_CONSOLE_LOG_RE, r"\bconsole\.log\(");
 re!(PATCH_CONSOLE_OFF_RE, r"\bpatchConsole[ \t]*:[ \t]*false\b");
 
-fn indent_of(line: &str) -> usize {
-    line.chars().take_while(|c| *c == ' ' || *c == '\t').count()
-}
-
+/// Ink only. Textual captures `print` while an app runs (Textualize/textual#2952,
+/// `App._print`), so a Python file is never reported.
 fn scan_terminal_print_in_loop(lines: &[&str], file_path: &str, stack: Stack) -> Vec<Finding> {
-    match stack {
-        Stack::Ink => {
-            // Ink defaults to `patchConsole: true`, which captures console
-            // output and re-renders it above the frame. Only a file that
-            // turns that off can corrupt the frame with `console.log`.
-            if !lines.iter().any(|l| PATCH_CONSOLE_OFF_RE.is_match(l)) {
-                return Vec::new();
-            }
-            lines
-                .iter()
-                .enumerate()
-                .filter(|(_, l)| INK_CONSOLE_LOG_RE.is_match(l))
-                .map(|(i, _)| hit("tui-print-in-loop", file_path, lines, i))
-                .collect()
-        }
-        Stack::Textual => {
-            let n = lines.len();
-            let mut out = Vec::new();
-            let mut i = 0;
-            while i < n {
-                if !TEXTUAL_CLASS_RE.is_match(lines[i]) {
-                    i += 1;
-                    continue;
-                }
-                let class_indent = indent_of(lines[i]);
-                i += 1;
-                let mut method_indent: Option<usize> = None;
-                let mut in_worker = false;
-                while i < n {
-                    let l = lines[i];
-                    let blank = l.trim().is_empty();
-                    if !blank && indent_of(l) <= class_indent {
-                        break;
-                    }
-                    if PY_DEF_RE.is_match(l) {
-                        let def_indent = indent_of(l);
-                        // A def no deeper than the current method is a new method; a
-                        // deeper one is a nested function and leaves the enclosing
-                        // method's indent/worker status unchanged.
-                        let is_new_method = method_indent.map(|m| def_indent <= m).unwrap_or(true);
-                        if is_new_method {
-                            method_indent = Some(def_indent);
-                            // Decorators sit directly above the def; `@work` marks a worker.
-                            in_worker = false;
-                            let mut k = i;
-                            while k > 0 && lines[k - 1].trim_start().starts_with('@') {
-                                k -= 1;
-                                let d = lines[k].trim_start();
-                                if d == "@work" || d.starts_with("@work(") || d.starts_with("@work.") {
-                                    in_worker = true;
-                                }
-                            }
-                        }
-                    } else if !blank
-                        && !in_worker
-                        && method_indent.map(|m| indent_of(l) > m).unwrap_or(false)
-                        && PY_PRINT_RE.is_match(l)
-                    {
-                        out.push(hit("tui-print-in-loop", file_path, lines, i));
-                    }
-                    i += 1;
-                }
-            }
-            out
-        }
-        Stack::Ratatui | Stack::Charm | Stack::TextualCss => Vec::new(),
+    // Ink defaults to `patchConsole: true`, which captures console output and
+    // re-renders it above the frame. Only a file that turns that off can
+    // corrupt the frame with `console.log`.
+    if stack != Stack::Ink || !lines.iter().any(|l| PATCH_CONSOLE_OFF_RE.is_match(l)) {
+        return Vec::new();
     }
+    lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| INK_CONSOLE_LOG_RE.is_match(l))
+        .map(|(i, _)| hit("tui-print-in-loop", file_path, lines, i))
+        .collect()
 }
 
 /// Run every terminal rule over one file. `source` is the file text with
@@ -980,11 +917,11 @@ mod tests {
     }
 
     #[test]
-    fn print_inside_a_textual_widget_is_flagged_but_workers_and_module_level_pass() {
-        let src = "from textual.app import App\nprint(\"module level is fine\")\n\nclass Demo(App):\n    def on_mount(self) -> None:\n        print(\"corrupts the frame\")\n        self.log(\"fine\")\n\n    @work(thread=True)\n    def fetch(self) -> None:\n        print(\"worker output is allowed\")\n\ndef helper():\n    print(\"outside the class\")\n";
-        let f = scan(src, Stack::Textual, Some(&ALL));
-        assert_eq!(ids(&f), vec!["tui-print-in-loop"]);
-        assert_eq!(f[0].line, 6.0);
+    fn print_in_a_textual_app_is_not_flagged_because_textual_captures_it() {
+        // Textual routes `print` to devtools or nowhere while an app runs
+        // (Textualize/textual#2952, `App._print`), so it cannot corrupt the frame.
+        let src = "from textual.app import App\nprint(\"module level\")\n\nclass Demo(App):\n    def on_mount(self) -> None:\n        print(\"captured by Textual\")\n\n    @network_retry\n    def fetch(self) -> None:\n        def inner() -> None:\n            print(\"nested\")\n        print(\"outer\")\n";
+        assert!(scan(src, Stack::Textual, Some(&ALL)).is_empty());
     }
 
     #[test]
@@ -1010,23 +947,6 @@ mod tests {
         for f in &f {
             assert_eq!(f.severity, "advisory", "{}", f.antipattern);
         }
-    }
-
-    #[test]
-    fn non_worker_decorator_does_not_exempt_print() {
-        let src = "from textual.app import App\n\nclass Demo(App):\n    @network_retry\n    def on_mount(self) -> None:\n        print(\"x\")\n";
-        let f = scan(src, Stack::Textual, Some(&ALL));
-        assert_eq!(ids(&f), vec!["tui-print-in-loop"]);
-        assert_eq!(f[0].line, 6.0);
-    }
-
-    #[test]
-    fn print_after_a_nested_helper_is_still_flagged() {
-        let src = "from textual.app import App\n\nclass Demo(App):\n    def on_mount(self) -> None:\n        def inner() -> None:\n            print(\"nested\")\n        print(\"outer\")\n";
-        let f = scan(src, Stack::Textual, Some(&ALL));
-        assert_eq!(ids(&f), vec!["tui-print-in-loop", "tui-print-in-loop"]);
-        let lines: Vec<f64> = f.iter().map(|f| f.line).collect();
-        assert_eq!(lines, vec![6.0, 7.0]);
     }
 
     #[test]
