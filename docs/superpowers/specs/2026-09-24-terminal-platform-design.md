@@ -393,6 +393,7 @@ Branch `terminal-platform-pr6`. Scope: `crates/context/src/staleness.rs`, `stale
 - **Cargo.** Dotted keys (`ratatui.workspace = true`, `ratatui.version = "0.29"`) and table headers ending in `dependencies.ratatui]` match. Member crates stay unread: Tier 1 reads only the root manifest.
 - **Weak evidence.** `rich` and `crossterm` are removed from the evidence list, so neither suggests `terminal` alone. The tests that pin `rich` alone are inverted.
 - **Doctor wording.** The deep finding says a workspace "carries terminal dependencies" when the evidence is terminal, and keeps "carries native build files" for mobile.
+- **Detector directive.** On `terminal`, the boot's `MANUAL_DETECTOR_REQUIRED` directive (`append_detector_fallback` in `crates/context/src/context_cli.rs`) says "Once the changed terminal UI is finished, run the mechanical detector over its source:" where it said "Once the changed web UI is finished, run the mechanical detector over it:". Every other platform keeps its wording; native platforms still get no directive. Only the `context-terminal` golden moves.
 - **Routing targets.** `scan_targets` takes the platform that `gather_signals` already extracts one line earlier. On `terminal` it also counts `.rs`, `.go`, `.py`, and `.tcss` files, adds `cmd`, `internal`, and `pkg` to the source directories, and targets the root when it holds `Cargo.toml`, `go.mod`, or `pyproject.toml` beside top-level source files. A Go `cmd/` layout or a flat Python package then gets the detect run `routing.md` promises.
 
 Tests: unit tests per matcher change, a unit test per `scan_targets` layout, and two oracle cases recorded with `--bin`: `doctor-terminal-evidence-charm-v2` (a `charm.land` go.mod) and `signals-terminal-go-layout` (a `cmd/` tree), plus `doctor-monorepo-terminal-evidence` for the workspace wording. `doctor-terminal-evidence-text` and `-json` report the root finding, whose wording does not change, so they replay unchanged.
@@ -447,6 +448,7 @@ Tests: `tests/skill-reference.test.mjs` pins the Compact row, the live guard, an
 | Emoji width mismatch | PR 4, item 6 |
 | `client_termfeatures` empty when detached | PR 4, item 9 (documented) |
 | `tui-rt-no-key-hints` on tables and pager prompts | PR 4, item 7 |
+| `MANUAL_DETECTOR_REQUIRED` says "web UI" on terminal (found while planning) | PR 6 |
 | Four runtime rules unmeasured on real programs | Left out: needs a manual pass after PR 4 |
 
 ### Delivery gates

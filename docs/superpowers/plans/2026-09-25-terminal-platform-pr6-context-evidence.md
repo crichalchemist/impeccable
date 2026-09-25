@@ -34,9 +34,9 @@
 5. **Python matching.** After stripping a `#` comment, the line itself and every quoted segment on it (split on `"` and `'`, odd segments) are read as a requirement: a name run that starts alphanumeric and continues over `[A-Za-z0-9._-]`, compared after PEP 503 normalization (`pep503_normalize`: lowercase, each run of `-`, `_`, `.` folded to one `-`), followed after optional spaces by nothing or one of `[ ( < > = ! ~ ; @`. The line form keeps Poetry's `textual = "^0.80"` and requirements lines working; the tail check keeps `description = "Textual app for notes"` out. A comma is deliberately not a tail character: `"Textual, a TUI framework"` in prose would otherwise match. Accepted residuals, recorded here: `keywords = ["textual"]` and a project literally named `textual` still match.
 6. **Cargo matching.** A key line matches when, after an optional `"`, it starts with the crate name and the next character (after an optional closing `"`) is whitespace, `=`, or `.`; the `.` admits `ratatui.workspace = true` and `ratatui.version = "0.29"`. A `[` line matches when it ends in `dependencies.ratatui]`, which covers `[dependencies.ratatui]`, `[dev-dependencies.ratatui]`, `[workspace.dependencies.ratatui]`, and `[target.'cfg(unix)'.dependencies.ratatui]`. `#` comments are stripped first. The `require ` and `/vN` handling the old shared scanner applied to Cargo and Python is gone.
 7. **Doctor wording through the suggested platform, not text sniffing.** The body of `check_native_platform_evidence` (staleness.rs:179-282) moves into `pub fn native_platform_evidence(..) -> Option<(Finding, &'static str)>` returning the finding and the suggested platform; `check_native_platform_evidence` stays as the wrapper boot calls (staleness.rs:556). `check_workspaces` (staleness_deep.rs:387) calls the inner function and says "carries terminal dependencies" when the suggestion is `terminal`, "carries native build files" otherwise. Mixed mobile and terminal evidence suggests a mobile platform and keeps the build-files wording.
-8. **Spec conflict: re-recording `doctor-terminal-evidence-text` and `-json` would change nothing.** Verified: no golden contains "carries native build files"; those two cases run the root-level Tier 1 finding (`platform-native-evidence`), whose sentence this PR does not touch, and their single-line bubbletea `require` still counts. Proposed ruling: they replay unchanged (Task 9 asserts it), and the new wording is pinned by a unit test in `staleness_deep.rs` and a third oracle case, `doctor-monorepo-terminal-evidence` (ctx-monorepo, `apps/b/Cargo.toml` with `ratatui.workspace = true`; apps/b inherits the web PRODUCT.md, so the workspace sentence fires). Reported to the controller.
-9. **Spec conflict: section 1's evidence table** still lists `crossterm` and `rich`. Section 7 (later, and the owner's decision) wins; the plan does not edit section 1. Task 9 offers the controller an in-place "(PR 6)" correction of that table if the controller approves it.
-10. **Scope addition: `docs/CLI-CONTRACT.md`.** Section 7's PR 6 scope omits it, but the root guide says a verb behavior change updates the contract, and lines 658 (evidence), 682 (`checkWorkspaces`), and 797 (`scan`) describe exactly what changes. Task 9 edits those three lines.
+8. **Spec conflict: re-recording `doctor-terminal-evidence-text` and `-json` would change nothing.** Verified: no golden contains "carries native build files"; those two cases run the root-level Tier 1 finding (`platform-native-evidence`), whose sentence this PR does not touch, and their single-line bubbletea `require` still counts. Proposed ruling: they replay unchanged (Task 10 asserts it), and the new wording is pinned by a unit test in `staleness_deep.rs` and a third oracle case, `doctor-monorepo-terminal-evidence` (ctx-monorepo, `apps/b/Cargo.toml` with `ratatui.workspace = true`; apps/b inherits the web PRODUCT.md, so the workspace sentence fires). Reported to the controller.
+9. **Spec conflict: section 1's evidence table** still lists `crossterm` and `rich`. Section 7 (later, and the owner's decision) wins; the plan does not edit section 1. Task 10 offers the controller an in-place "(PR 6)" correction of that table if the controller approves it.
+10. **Scope addition: `docs/CLI-CONTRACT.md`.** Section 7's PR 6 scope omits it, but the root guide says a verb behavior change updates the contract, and lines 658 (evidence), 682 (`checkWorkspaces`), and 797 (`scan`) describe exactly what changes. Task 10 edits those three lines.
 11. **`scan_targets(cwd, git, platform)` order on `terminal`:** git changes (web extensions plus `TERMINAL_EXTENSIONS`), then the root step, then source dirs (`src app components pages public`, then `cmd internal pkg`), then `index.html`, then `has_code`. The root step runs before source dirs because `.` subsumes them: a go.mod with `main.go` at the root and an `internal/` dir would otherwise target only `internal` and miss `main.go`. The root step is: the root holds `Cargo.toml`, `go.mod`, or `pyproject.toml`, and a file with a terminal extension sits directly in the root (one `read_dir_entries(cwd)`, no recursion). It reuses `via: "root"`, because `routing.md:22` enumerates the `via` values and skill text is PR 7's. The existing `signals-terminal` golden (`ctx-terminal`: Cargo.toml plus `src/main.rs`, nothing at the root) stays `["src"]` via `source-dir`.
 12. **Spec wording "a flat Python package" is read as modules beside `pyproject.toml`.** A package directory at the root (`mypkg/__init__.py` with no root `.py`) still gets `[]`; so does a Cargo virtual workspace with only `crates/`. Both are recorded as remaining gaps, as is `setup.hasCode` staying `false` for Go and Python projects (it only looks for `package.json` and web dirs). None is in section 7's scope.
 13. **The Go layout case gets its own workspace, `ctx-terminal-go`,** with no `package.json`, because a Go project has none. On `ctx-empty` the `package.json` makes `has_code` true, so the golden before this PR would already read `["."]` via `root` and the case would not show the gap routing actually hits. On the new workspace the binary before this PR yields `targets: []`, `via: null`; after it, `["cmd", "internal"]` via `source-dir`.
@@ -1164,7 +1164,90 @@ git commit -m "$(printf 'Give routing a detect target on terminal source layouts
 ```
 
 ---
-### Task 8: Oracle cases and goldens
+### Task 8: Terminal wording for `MANUAL_DETECTOR_REQUIRED`
+
+Added by the controller after planning, at the owner's request. On a terminal project the boot tells the agent to run the detector over "the changed web UI"; the spec's PR 6 "Detector directive" bullet fixes the wording.
+
+**Files:**
+- Modify: `crates/context/src/context_cli.rs` (`append_detector_fallback`, about line 199)
+- Modify: `docs/CLI-CONTRACT.md` (the `MANUAL_DETECTOR_REQUIRED` bullet, about line 633)
+- Record: `tests/oracle/golden/context-terminal.json`
+
+**Interfaces:**
+- Consumes: `Ctx.platform: Option<String>` (already parsed; `Some("terminal")` on a terminal project), `provider.verb_cmd("detect")`.
+- Produces: nothing new.
+
+- [ ] **Step 1: Confirm the current golden carries the web wording.**
+
+Run: `grep -c "Once the changed web UI is finished" tests/oracle/golden/context-terminal.json`
+Expected: `1`
+
+- [ ] **Step 2: Change the directive.** In `append_detector_fallback`, replace:
+
+```rust
+    parts.push([
+        "MANUAL_DETECTOR_REQUIRED: No automatic Impeccable design hook is active this session.".to_string(),
+        format!("Once the changed web UI is finished, run the mechanical detector over it: `{} --json <changed targets>`.", provider.verb_cmd("detect")),
+        "Run it once, and not earlier during concept selection.".to_string(),
+    ].join(" "));
+```
+
+with:
+
+```rust
+    let finished = if ctx.platform.as_deref() == Some("terminal") {
+        "Once the changed terminal UI is finished, run the mechanical detector over its source"
+    } else {
+        "Once the changed web UI is finished, run the mechanical detector over it"
+    };
+    parts.push([
+        "MANUAL_DETECTOR_REQUIRED: No automatic Impeccable design hook is active this session.".to_string(),
+        format!("{finished}: `{} --json <changed targets>`.", provider.verb_cmd("detect")),
+        "Run it once, and not earlier during concept selection.".to_string(),
+    ].join(" "));
+```
+
+- [ ] **Step 3: Build and re-record the one golden.**
+
+```bash
+cargo build --release -p impeccable
+IMPECCABLE_BIN="$PWD/target/release/impeccable" node tests/oracle/record.mjs --bin context-terminal
+git diff --stat tests/oracle/golden/
+```
+
+Expected: `context-terminal.json` changes; `context-terminal-evidence-web.json` (platform web) and every other `context-*` golden are unchanged. If the prefix also re-records other `context-terminal*` cases, `git diff` must show no change in them. Review the diff by hand: the only change is "web UI is finished, run the mechanical detector over it" becoming "terminal UI is finished, run the mechanical detector over its source".
+
+- [ ] **Step 4: Replay the web wording.**
+
+Run: `IMPECCABLE_BIN="$PWD/target/release/impeccable" node --test --test-name-pattern="context-" tests/oracle.test.mjs`
+Expected: PASS, which proves the web goldens (for example `context-design-only`) still carry the old sentence.
+
+- [ ] **Step 5: Contract.** In `docs/CLI-CONTRACT.md`, directly after the `MANUAL_DETECTOR_REQUIRED` bullet (search for `MANUAL_DETECTOR_REQUIRED: No automatic`), add an indented sub-bullet at the same indentation as that bullet's continuation lines:
+
+```
+    On `terminal` the second sentence reads `Once the changed terminal UI is finished, run the mechanical detector over its source: ...`; native platforms get no directive.
+```
+
+Match the surrounding bullet's indentation exactly (read the lines around it first).
+
+- [ ] **Step 6: Commit.**
+
+```bash
+git add crates/context/src/context_cli.rs docs/CLI-CONTRACT.md tests/oracle/golden/context-terminal.json
+git commit -q -F - <<'EOF'
+Say terminal UI in the manual detector directive on terminal projects
+
+The boot directive told terminal projects to scan the changed web UI.
+Name the terminal UI and its source instead; other platforms keep the
+existing sentence.
+
+AI assistance: drafted with Claude Code.
+EOF
+```
+
+---
+
+### Task 9: Oracle cases and goldens
 
 **Files:**
 - Create: `tests/oracle/workspaces/ctx-terminal-go/PRODUCT.md`, `go.mod`, `cmd/app/main.go`, `internal/ui/view.go`
@@ -1327,7 +1410,7 @@ git commit -m "$(printf 'Pin Charm v2 evidence, workspace wording, and Go routin
 
 ---
 
-### Task 9: Contract, full gates
+### Task 10: Contract, full gates
 
 **Files:**
 - Modify: `docs/CLI-CONTRACT.md` (the evidence sentence on line 658, the `checkWorkspaces` line 682, the `scan` sentence on line 797)
@@ -1368,7 +1451,7 @@ node -e "const s=require('fs').readFileSync('docs/CLI-CONTRACT.md','utf8'); cons
 git diff main --stat
 ```
 
-Expected: every `test result` ok; `bun run test` shows only the Task 1 baseline failures (rerun a bun 5 s timeout alone before calling it baseline); the em dash count equals the Task 1 count (the contract's existing `#### path <em dash> title` headings; this task adds none); the diff lists only `crates/context/src/{staleness,staleness_deep,signals}.rs`, `docs/CLI-CONTRACT.md`, and the Task 8 oracle files.
+Expected: every `test result` ok; `bun run test` shows only the Task 1 baseline failures (rerun a bun 5 s timeout alone before calling it baseline); the em dash count equals the Task 1 count (the contract's existing `#### path <em dash> title` headings; this task adds none); the diff lists only `crates/context/src/{staleness,staleness_deep,signals}.rs`, `docs/CLI-CONTRACT.md`, and the Task 9 oracle files.
 
 - [ ] **Step 5: Commit**
 
@@ -1381,7 +1464,7 @@ git commit -m "$(printf 'Document PR 6 evidence matching, workspace wording, and
 
 ---
 
-### Task 10: Final review, merge to the fork's main, push
+### Task 11: Final review, merge to the fork's main, push
 
 **Files:** none new.
 
@@ -1412,7 +1495,7 @@ git log --oneline -3
 ## Self-review notes
 
 - Spec section 7, PR 6 bullets: go.mod require-only, `// indirect`, other blocks, inverted indirect test (Task 3); Charm `charm.land` paths and `bubbles` (Task 3); PEP 503 and every quoted string (Task 4); Cargo dotted keys and `dependencies.ratatui]` headers, member crates unread (Task 5, and the table doc comment in Task 2); `rich` and `crossterm` removed, `rich` test inverted, `crossterm` pinned (Task 2); doctor wording (Task 6); routing targets: platform passed from `gather_signals`, terminal extensions, `cmd internal pkg`, root with a manifest beside top-level source (Task 7).
-- Spec tests: a unit test per matcher change (Tasks 2 to 5), one per `scan_targets` layout (Task 7), the two named oracle cases plus `doctor-monorepo-terminal-evidence` (Task 8). The `doctor-terminal-evidence-*` re-record is replaced by a replay (decision 8).
+- Spec tests: a unit test per matcher change (Tasks 2 to 5), one per `scan_targets` layout (Task 7), the two named oracle cases plus `doctor-monorepo-terminal-evidence` (Task 9). The `doctor-terminal-evidence-*` re-record is replaced by a replay (decision 8).
 - Delivery gate: `cargo test --workspace`, the oracle cases, `bun run test` (Tasks 8 to 10). No `cargo xtask bundle` is owed.
 - Type consistency: `manifest_names_dependency(manifest, text, name)` in Tasks 2 to 5; `native_platform_evidence(..) -> Option<(Finding, &'static str)>` in Task 6 only; `scan_targets(cwd, git, platform)` in Task 7 only; `TERMINAL_EVIDENCE_MANIFESTS: [(&str, &[(&str, &str)]); 4]` from Task 2 on.
 - Not in this PR: skill text (`routing.md`'s `via` list, `doctor.md`'s evidence wording) is PR 7's; `hasCode` for Go and Python projects, a root package directory, and Cargo virtual workspaces stay recorded gaps (decision 12); concept-seed forwarding stays left out (spec).
