@@ -26,7 +26,8 @@ pub mod util;
 use impeccable_common::Io;
 
 pub use engines::{
-    Engines, HtmlEngine, MissingHtmlEngine, MissingUrlEngine, ScanOptions, UrlEngine,
+    Engines, HtmlEngine, MissingHtmlEngine, MissingTmuxEngine, MissingUrlEngine, ScanOptions,
+    TmuxEngine, UrlEngine,
 };
 
 /// `impeccable detect [args]` (`detectCli`). Returns the exit code.

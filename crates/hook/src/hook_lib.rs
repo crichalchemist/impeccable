@@ -1650,6 +1650,9 @@ impl HookScanOptions {
             rule_pack: None,
             platform: self.platform.clone(),
             signals: self.signals.clone(),
+            tmux_sizes: Vec::new(),
+            tmux_settle_ms: None,
+            palette: None,
         }
     }
 }

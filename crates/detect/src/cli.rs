@@ -40,6 +40,13 @@ Options:
   --no-design-system  Do not load local DESIGN.md / .impeccable/design.json context
   --no-advisory       Suppress advisory findings entirely (e.g. em-dash overuse)
   --platform <value>  Scan as web|ios|android|adaptive|terminal instead of reading PRODUCT.md
+  --tmux <target>     Capture a running tmux pane (session:window.pane) and run
+                      the terminal runtime rules over it (tmux 3.2 or newer)
+  --tmux-capture <f>  Run the runtime rules over a saved capture-pane -p -e -J file
+  --tmux-sizes <list> Also capture the pane at each WxH and restore its size after,
+                      e.g. --tmux-sizes 80x24,120x40,40x24
+  --tmux-settle <ms>  Wait after each resize before capturing (default 300)
+  --palette <name>    Contrast palette for tmux scans: dark (default) or light
   --help              Show this help message
 
 Advisory findings:
@@ -75,6 +82,8 @@ Detection modes:
   Non-HTML files Regex pattern matching (CSS, JSX, TSX, etc.)
   URLs           Puppeteer full browser rendering (auto-detected;
                  http(s):// and file:// URLs; accessible linked CSS included)
+  tmux panes     --tmux captures the rendered grid with colors, never launching
+                 or typing; --tmux-capture replays a saved capture without tmux
 
 Examples:
   impeccable detect src/
@@ -82,6 +91,7 @@ Examples:
   impeccable detect https://example.com
   impeccable detect --json .
   impeccable detect --no-config src/
+  impeccable detect --tmux app:0.0 --tmux-sizes 80x24,120x40,40x24
 ";
 
 fn format_finding_summary(count: usize) -> String {
@@ -344,6 +354,13 @@ re!(URL_RE, "^(?i:https?|file)://");
 re!(WHITESPACE_RE, impeccable_core::js::WS.to_string());
 re!(WS_RUN_RE, format!("{}+", impeccable_core::js::WS));
 re!(FILE_URL_RE, "^(?i:file):");
+re!(TMUX_SIZE_RE, format!("^({D}{{1,4}})[xX]({D}{{1,4}})$"));
+
+/// A flag whose value is missing or malformed: the message, exit 1.
+fn usage_error(io: &mut Io, message: &str) -> Result<i32, Exit> {
+    io.err(message);
+    Err(Exit(1))
+}
 
 /// `fileURLToPath` for the `file:` URLs the CLI accepts; None when it can't map.
 fn file_url_to_local_path(url: &str) -> Option<String> {
@@ -520,6 +537,62 @@ fn detect_cli(args_in: &[String], io: &mut Io, engines: &Engines) -> Result<i32,
             }
         }
     }
+    // --tmux, --tmux-capture, --tmux-sizes, --tmux-settle, --palette (spec
+    // section 5). Each value is spliced out like --viewport's so it never
+    // becomes a target; the --flag=value form works for all five.
+    const TMUX_SIZES_ERROR: &str = "Error: --tmux-sizes requires comma-separated WxH values, e.g. --tmux-sizes 80x24,120x40,40x24\n";
+    const TMUX_SETTLE_ERROR: &str = "Error: --tmux-settle requires a whole number of milliseconds\n";
+    let mut tmux_panes: Vec<String> = Vec::new();
+    let mut tmux_captures: Vec<String> = Vec::new();
+    let mut tmux_sizes: Vec<(u32, u32)> = Vec::new();
+    let mut tmux_settle_ms: Option<u64> = None;
+    let mut palette: Option<String> = None;
+    let mut i = 0;
+    while i < args.len() {
+        let (flag, inline_value) = match args[i].split_once('=') {
+            Some((f, v)) if f.starts_with("--") => (f.to_string(), Some(v.to_string())),
+            _ => (args[i].clone(), None),
+        };
+        if !matches!(flag.as_str(), "--tmux" | "--tmux-capture" | "--tmux-sizes" | "--tmux-settle" | "--palette") {
+            i += 1;
+            continue;
+        }
+        let value = inline_value
+            .clone()
+            .or_else(|| args.get(i + 1).cloned())
+            .filter(|v| !v.starts_with("--"));
+        match (flag.as_str(), value) {
+            ("--tmux", Some(v)) => tmux_panes.push(v),
+            ("--tmux", None) => return usage_error(io, "Error: --tmux requires a tmux target, e.g. --tmux app:0.0\n"),
+            ("--tmux-capture", Some(v)) => tmux_captures.push(v),
+            ("--tmux-capture", None) => return usage_error(io, "Error: --tmux-capture requires a path to a saved capture\n"),
+            ("--tmux-sizes", Some(v)) => {
+                for part in v.split(',') {
+                    let Some(m) = TMUX_SIZE_RE.captures(impeccable_core::js::trim(part)) else {
+                        return usage_error(io, TMUX_SIZES_ERROR);
+                    };
+                    tmux_sizes.push((m[1].parse().unwrap_or(0), m[2].parse().unwrap_or(0)));
+                }
+            }
+            ("--tmux-sizes", None) => return usage_error(io, TMUX_SIZES_ERROR),
+            ("--tmux-settle", Some(v)) => match v.parse::<u64>() {
+                Ok(ms) => tmux_settle_ms = Some(ms),
+                Err(_) => return usage_error(io, TMUX_SETTLE_ERROR),
+            },
+            ("--tmux-settle", None) => return usage_error(io, TMUX_SETTLE_ERROR),
+            ("--palette", Some(v)) if v == "dark" || v == "light" => palette = Some(v),
+            ("--palette", _) => return usage_error(io, "Error: --palette requires dark or light\n"),
+            _ => unreachable!("every tmux flag is matched above"),
+        }
+        let n = if inline_value.is_some() { 1 } else { 2 };
+        for _ in 0..n {
+            if i < args.len() {
+                args.remove(i);
+            }
+        }
+    }
+    let has_tmux_targets = !tmux_panes.is_empty() || !tmux_captures.is_empty();
+
     // The flag wins; else the binary's PRODUCT.md resolver for the process
     // cwd; else web. Resolved once per run, not per target (spec ruling 6).
     let platform: Option<String> =
@@ -551,6 +624,9 @@ fn detect_cli(args_in: &[String], io: &mut Io, engines: &Engines) -> Result<i32,
         rule_pack: None,
         platform: platform.clone(),
         signals: None,
+        tmux_sizes,
+        tmux_settle_ms,
+        palette: palette.clone(),
     };
     let targets: Vec<String> = expand_joined_url_targets(
         args.iter()
@@ -586,10 +662,10 @@ fn detect_cli(args_in: &[String], io: &mut Io, engines: &Engines) -> Result<i32,
     };
 
     let mut all: Vec<Finding> = Vec::new();
-    if !stdin_tty && targets.is_empty() {
+    if !stdin_tty && targets.is_empty() && !has_tmux_targets {
         all = ctx.handle_stdin().map_err(|e| fatal(ctx.io, e))?;
     } else {
-        let paths: Vec<String> = if targets.is_empty() {
+        let paths: Vec<String> = if targets.is_empty() && !has_tmux_targets {
             vec![cwd.clone()]
         } else {
             targets.clone()
@@ -626,6 +702,7 @@ fn detect_cli(args_in: &[String], io: &mut Io, engines: &Engines) -> Result<i32,
             s.close();
         }
         result?;
+        scan_tmux_targets(&mut ctx, &tmux_panes, &tmux_captures, &mut all);
     }
 
     all = filter_detection_findings(all, &ctx.config);
@@ -886,6 +963,41 @@ fn scan_targets(
     Ok(())
 }
 
+/// `--tmux` panes and `--tmux-capture` files (spec section 5). A pane failure
+/// is reported like a URL scan's (`Error: <message>`); a capture file like a
+/// local file's. Both set the operational failure and the run continues.
+fn scan_tmux_targets(ctx: &mut Ctx, panes: &[String], captures: &[String], all: &mut Vec<Finding>) {
+    use crate::engines::{MissingTmuxEngine, TmuxEngine};
+    let options = ctx.base.clone();
+    for target in panes {
+        let result = match ctx.engines.tmux {
+            Some(engine) => engine.detect_pane(target, &options),
+            None => MissingTmuxEngine.detect_pane(target, &options),
+        };
+        match result {
+            Ok(f) => all.extend(f),
+            Err(e) => {
+                ctx.had_operational_failure = true;
+                ctx.io.err(&format!("Error: {}\n", e.message));
+            }
+        }
+    }
+    for path in captures {
+        let resolved = jsp::resolve(&ctx.cwd, &[path]);
+        let result = match ctx.engines.tmux {
+            Some(engine) => engine.detect_capture(&resolved, &options),
+            None => MissingTmuxEngine.detect_capture(&resolved, &options),
+        };
+        match result {
+            Ok(f) => all.extend(f),
+            Err(e) => {
+                let message = e.message.clone();
+                ctx.report_local_scan_failure(path, &message);
+            }
+        }
+    }
+}
+
 /// JS `confirm(question)`: readline on a TTY stdin, prompt to stderr.
 fn confirm(io: &mut Io, question: &str) -> bool {
     io.err(&format!("{question} [Y/n] "));
@@ -915,12 +1027,12 @@ fn stderr_is_tty() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engines::{Engines, MissingHtmlEngine};
+    use crate::engines::{EngineError, Engines, MissingHtmlEngine, ScanOptions};
     use std::collections::HashMap;
 
     fn engines(platform: Option<&'static dyn Fn(&str) -> Option<String>>) -> Engines<'static> {
         static HTML: MissingHtmlEngine = MissingHtmlEngine;
-        Engines { html: &HTML, url: None, platform }
+        Engines { html: &HTML, url: None, tmux: None, platform }
     }
 
     fn project(name: &str) -> std::path::PathBuf {
@@ -984,5 +1096,89 @@ mod tests {
         assert!(rgb.get("note").is_none(), "a directory scan decides from signals: {rgb}");
         let (_, out, _) = run(&dir, &["--no-config", "--json", "--platform", "terminal", "src/theme.rs"], &engines(None));
         assert!(out.contains("project signals were not collected"), "{out}");
+    }
+
+    struct FakeTmux;
+    impl crate::engines::TmuxEngine for FakeTmux {
+        fn detect_pane(&self, target: &str, options: &ScanOptions) -> Result<Vec<Finding>, EngineError> {
+            let mut f = impeccable_core::findings::finding(
+                "tui-rt-no-key-hints",
+                &format!("tmux:{target}"),
+                &format!("sizes={:?} palette={:?} settle={:?}", options.tmux_sizes, options.palette, options.tmux_settle_ms),
+                1.0,
+            );
+            impeccable_core::findings::derive_advisory_flag(&mut f);
+            Ok(vec![f])
+        }
+        fn detect_capture(&self, path: &str, _options: &ScanOptions) -> Result<Vec<Finding>, EngineError> {
+            Err(EngineError::new(format!("ENOENT: no such file or directory, open '{path}'")))
+        }
+    }
+
+    fn engines_with_tmux() -> Engines<'static> {
+        static HTML: MissingHtmlEngine = MissingHtmlEngine;
+        static TMUX: FakeTmux = FakeTmux;
+        Engines { html: &HTML, url: None, tmux: Some(&TMUX), platform: None }
+    }
+
+    #[test]
+    fn tmux_flags_reach_the_engine_and_their_values_never_become_targets() {
+        let dir = project("tmux-flags");
+        let (code, out, err) = run(
+            &dir,
+            &["--no-config", "--json", "--tmux", "app:0.0", "--tmux-sizes", "80x24,40x24", "--palette=light", "--tmux-settle", "50"],
+            &engines_with_tmux(),
+        );
+        assert_eq!(code, 0, "advisory findings never fail the run: {err}");
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let items = v.as_array().unwrap();
+        assert_eq!(items.len(), 1, "no cwd fallback scan happened: {out}");
+        assert_eq!(items[0]["file"], "tmux:app:0.0");
+        assert_eq!(items[0]["snippet"], "sizes=[(80, 24), (40, 24)] palette=Some(\"light\") settle=Some(50)");
+        assert_eq!(items[0]["advisory"], true);
+        assert!(!err.contains("cannot access"), "a flag value was taken as a target: {err}");
+    }
+
+    #[test]
+    fn tmux_pane_and_file_targets_scan_together() {
+        let dir = project("tmux-mixed");
+        let (_, out, _) = run(&dir, &["--no-config", "--json", "--platform", "terminal", "--tmux", "app:0.0", "src"], &engines_with_tmux());
+        assert!(out.contains("\"tui-double-border\"") && out.contains("tmux:app:0.0"), "{out}");
+    }
+
+    #[test]
+    fn unreadable_capture_file_is_an_operational_failure() {
+        let dir = project("tmux-capture");
+        let (code, _, err) = run(&dir, &["--no-config", "--json", "--tmux-capture", "missing.txt"], &engines_with_tmux());
+        assert_eq!(code, 1);
+        let resolved = jsp::resolve(&dir.to_string_lossy(), &["missing.txt"]);
+        assert_eq!(err, format!("Error: cannot scan missing.txt: ENOENT: no such file or directory, open '{resolved}'\n"));
+    }
+
+    #[test]
+    fn tmux_flag_values_are_validated_with_the_spec_messages() {
+        let dir = project("tmux-errors");
+        let cases: &[(&[&str], &str)] = &[
+            (&["--tmux"], "Error: --tmux requires a tmux target, e.g. --tmux app:0.0\n"),
+            (&["--tmux-capture"], "Error: --tmux-capture requires a path to a saved capture\n"),
+            (&["--tmux", "a:0", "--tmux-sizes", "wide"], "Error: --tmux-sizes requires comma-separated WxH values, e.g. --tmux-sizes 80x24,120x40,40x24\n"),
+            (&["--tmux", "a:0", "--tmux-sizes=80x24,"], "Error: --tmux-sizes requires comma-separated WxH values, e.g. --tmux-sizes 80x24,120x40,40x24\n"),
+            (&["--tmux", "a:0", "--tmux-settle", "soon"], "Error: --tmux-settle requires a whole number of milliseconds\n"),
+            (&["--tmux", "a:0", "--palette", "sepia"], "Error: --palette requires dark or light\n"),
+        ];
+        for (args, expected) in cases {
+            let mut full = vec!["--no-config"];
+            full.extend_from_slice(args);
+            let (code, _, err) = run(&dir, &full, &engines_with_tmux());
+            assert_eq!((code, err.as_str()), (1, *expected), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn build_without_the_tmux_engine_says_so() {
+        let dir = project("tmux-missing-engine");
+        let (code, _, err) = run(&dir, &["--no-config", "--tmux", "a:0"], &engines(None));
+        assert_eq!(code, 1);
+        assert_eq!(err, "Error: impeccable detect: tmux engine is not linked into this build\n");
     }
 }
