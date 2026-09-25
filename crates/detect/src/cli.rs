@@ -560,7 +560,7 @@ fn detect_cli(args_in: &[String], io: &mut Io, engines: &Engines) -> Result<i32,
         let value = inline_value
             .clone()
             .or_else(|| args.get(i + 1).cloned())
-            .filter(|v| !v.starts_with("--"));
+            .filter(|v| !v.is_empty() && !v.starts_with("--"));
         match (flag.as_str(), value) {
             ("--tmux", Some(v)) => tmux_panes.push(v),
             ("--tmux", None) => return usage_error(io, "Error: --tmux requires a tmux target, e.g. --tmux app:0.0\n"),
@@ -1160,7 +1160,9 @@ mod tests {
         let dir = project("tmux-errors");
         let cases: &[(&[&str], &str)] = &[
             (&["--tmux"], "Error: --tmux requires a tmux target, e.g. --tmux app:0.0\n"),
+            (&["--tmux="], "Error: --tmux requires a tmux target, e.g. --tmux app:0.0\n"),
             (&["--tmux-capture"], "Error: --tmux-capture requires a path to a saved capture\n"),
+            (&["--tmux-capture="], "Error: --tmux-capture requires a path to a saved capture\n"),
             (&["--tmux", "a:0", "--tmux-sizes", "wide"], "Error: --tmux-sizes requires comma-separated WxH values, e.g. --tmux-sizes 80x24,120x40,40x24\n"),
             (&["--tmux", "a:0", "--tmux-sizes=80x24,"], "Error: --tmux-sizes requires comma-separated WxH values, e.g. --tmux-sizes 80x24,120x40,40x24\n"),
             (&["--tmux", "a:0", "--tmux-settle", "soon"], "Error: --tmux-settle requires a whole number of milliseconds\n"),
