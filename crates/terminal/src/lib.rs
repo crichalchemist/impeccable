@@ -92,8 +92,9 @@ impl TmuxEngine for TerminalEngine {
             frames.push(frame_from(&again, &info, &colorterm, FrameRole::Recapture));
         }
         if !options.tmux_sizes.is_empty() {
+            let window_size = tmux.window_size(target).map_err(EngineError::new)?;
             let captured = capture_sizes(&tmux, target, options, &colorterm, &mut frames);
-            let restored = tmux.restore(target, info.window_width, info.window_height);
+            let restored = tmux.restore(target, info.window_width, info.window_height, &window_size);
             match (captured, restored) {
                 (Err(c), Err(r)) => return Err(EngineError::new(format!("{c}; window not restored: {r}"))),
                 (Ok(()), Err(r)) => return Err(EngineError::new(format!("window not restored: {r}"))),
@@ -209,6 +210,7 @@ echo "$1" >> "$DIR/calls.log"
 case "$1" in
   -V) echo "tmux 3.7c" ;;
   list-panes) exit 0 ;;
+  show-options) exit 0 ;;
   display-message) printf '40\t5\t40\t5\t\n' ;;
   capture-pane)
     {capture_pane}
@@ -219,6 +221,79 @@ case "$1" in
 esac
 "#
         )
+    }
+
+    /// A fake tmux that logs every call's full argument list to `calls.log`
+    /// and prints `window_size` for `show-options`, as tmux prints a window
+    /// option (nothing at all when the window has no value of its own).
+    #[cfg(unix)]
+    fn fake_tmux_logging_args(window_size: &str) -> String {
+        format!(
+            r#"#!/bin/sh
+DIR="$(dirname "$0")"
+echo "$*" >> "$DIR/calls.log"
+case "$1" in
+  -V) echo "tmux 3.7c" ;;
+  list-panes) exit 0 ;;
+  display-message) printf '40\t5\t40\t5\t\n' ;;
+  capture-pane) echo hi ;;
+  show-options) printf '{window_size}' ;;
+  resize-window|set-option) exit 0 ;;
+  *) exit 1 ;;
+esac
+"#
+        )
+    }
+
+    /// The calls that read or change the window, in order.
+    #[cfg(unix)]
+    fn window_calls(dir: &std::path::Path) -> Vec<String> {
+        std::fs::read_to_string(dir.join("calls.log"))
+            .unwrap()
+            .lines()
+            .filter(|l| ["show-options", "resize-window", "set-option"].iter().any(|v| l.starts_with(v)))
+            .map(String::from)
+            .collect()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn restore_puts_back_a_window_size_the_user_had_set() {
+        let (dir, fake) = fake_tmux("impeccable-terminal-restore-set", &fake_tmux_logging_args("largest\\n"));
+        let mut env = HashMap::new();
+        env.insert("IMPECCABLE_TMUX".to_string(), fake.to_string_lossy().into_owned());
+        let options = ScanOptions { tmux_sizes: vec![(30, 5)], tmux_settle_ms: Some(0), ..ScanOptions::default() };
+        TerminalEngine::new(env).detect_pane("smoke:0.0", &options).unwrap();
+        assert_eq!(
+            window_calls(&dir),
+            vec![
+                "show-options -w -v -t smoke:0.0 window-size",
+                "resize-window -t smoke:0.0 -x 30 -y 5",
+                "resize-window -t smoke:0.0 -x 40 -y 5",
+                "set-option -w -t smoke:0.0 window-size largest",
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn restore_unsets_window_size_when_the_window_had_none() {
+        let (dir, fake) = fake_tmux("impeccable-terminal-restore-unset", &fake_tmux_logging_args(""));
+        let mut env = HashMap::new();
+        env.insert("IMPECCABLE_TMUX".to_string(), fake.to_string_lossy().into_owned());
+        let options = ScanOptions { tmux_sizes: vec![(30, 5)], tmux_settle_ms: Some(0), ..ScanOptions::default() };
+        TerminalEngine::new(env).detect_pane("smoke:0.0", &options).unwrap();
+        assert_eq!(
+            window_calls(&dir),
+            vec![
+                "show-options -w -v -t smoke:0.0 window-size",
+                "resize-window -t smoke:0.0 -x 30 -y 5",
+                "resize-window -t smoke:0.0 -x 40 -y 5",
+                "set-option -w -t smoke:0.0 -u window-size",
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[cfg(unix)]

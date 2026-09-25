@@ -184,11 +184,23 @@ impl Tmux {
         self.run(&["resize-window", "-t", target, "-x", &width.to_string(), "-y", &height.to_string()]).map(|_| ())
     }
 
-    /// Back to the recorded size, then drop the `manual` window-size that
-    /// `resize-window` set so the window follows its clients again.
-    pub fn restore(&self, target: &str, width: usize, height: usize) -> Result<(), String> {
+    /// The window's own `window-size` option, trimmed: empty when the window
+    /// has none and follows the global value. Read before the first resize,
+    /// because `resize-window` replaces any value with `manual`.
+    pub fn window_size(&self, target: &str) -> Result<String, String> {
+        Ok(self.run(&["show-options", "-w", "-v", "-t", target, "window-size"])?.trim().to_string())
+    }
+
+    /// Back to the recorded size, then put back the `window-size` read before
+    /// the first resize, or unset the `manual` value `resize-window` left
+    /// when there was none, so the window follows its clients again.
+    pub fn restore(&self, target: &str, width: usize, height: usize, window_size: &str) -> Result<(), String> {
         self.resize(target, width, height)?;
-        self.run(&["set-option", "-w", "-t", target, "-u", "window-size"]).map(|_| ())
+        if window_size.is_empty() {
+            self.run(&["set-option", "-w", "-t", target, "-u", "window-size"]).map(|_| ())
+        } else {
+            self.run(&["set-option", "-w", "-t", target, "window-size", window_size]).map(|_| ())
+        }
     }
 }
 
