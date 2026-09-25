@@ -36,7 +36,7 @@ re!(
     KEY_HINT_RE,
     r"(?i)(?:^|[\s:|/,(\[<])(?:q|esc|enter|tab|space|ctrl|alt|shift|f\d{1,2}|[hjkl])(?:$|[\s:|/,)\]>])|[?↑↓←→⏎⌃⌘]|<[^>\s]{1,12}>|\[[^\]\s]{1,12}\]|\^[A-Z]"
 );
-re!(PAGER_PROMPT_RE, r"\(END\)|--More--|lines \d+-\d+");
+re!(PAGER_PROMPT_RE, r"\(END\)|--More--|\blines \d+-\d+");
 
 /// Every runtime rule over the frames of one target, in the frame policy
 /// spec section 5 fixes: size-invariant rules on the first frame, the spinner
@@ -673,6 +673,10 @@ pub(crate) mod tests {
         assert_eq!(rt_no_key_hints(&top, "x").len(), 1, "top names no key on its first row, so it still fires");
         let colon_inside = frame(80, &["NAME", "     less - opposite of more", "DESCRIPTION", "Status: idle"]);
         assert_eq!(rt_no_key_hints(&colon_inside, "x").len(), 1, "a colon inside text is not a prompt");
+        let guidelines = frame(80, &["NAME", "     less - opposite of more", "DESCRIPTION", "Guidelines 1-5 apply"]);
+        assert_eq!(rt_no_key_hints(&guidelines, "x").len(), 1, "\"lines\" inside another word is not a pager prompt");
+        let readme_lines = frame(80, &["NAME", "     less - opposite of more", "DESCRIPTION", "README.md lines 25-48"]);
+        assert!(rt_no_key_hints(&readme_lines, "x").is_empty(), "a real lines prompt still silences");
     }
 
     #[test]
