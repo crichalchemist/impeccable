@@ -72,17 +72,30 @@ describe('tmux engine against a scratch server', { skip: !BIN ? ENGINE_MISSING_M
   });
 
   it('restores the window and fails loudly when SIGINT lands during the size pass', async () => {
-    const child = spawn(BIN, ['detect', '--no-config', '--tmux', 'app:0.0', '--tmux-sizes', '40x24', '--tmux-settle', '5000'], {
+    const child = spawn(BIN, ['detect', '--no-config', '--tmux', 'app:0.0', '--tmux-sizes', '40x24', '--tmux-settle', '12000'], {
       env: engineEnv(BIN, { IMPECCABLE_TMUX: wrapper }),
     });
     let stderr = '';
     child.stderr.setEncoding('utf8').on('data', (d) => { stderr += d; });
     const exited = new Promise((resolve) => child.on('exit', (code, signal) => resolve({ code, signal })));
-    // Frame 0, the recaptures (1000 ms), show-options, and the resize take
-    // about 1.1 s, so 2.5 s lands inside the 5 s settle. Read the width
-    // before signalling, so a failed assertion never leaves the child running.
-    await new Promise((resolve) => setTimeout(resolve, 2500));
-    const midSettleWidth = tmux('display', '-p', '-t', 'app:0.0', '#{window_width}');
+    // Frame 0, the recaptures (1000 ms), show-options, and the resize land
+    // the pane at 40 columns before the settle starts; poll for it instead of
+    // trusting a fixed wait, so the test does not flake under load. Read the
+    // width before signalling, so a failed assertion never leaves the child
+    // running. The 12 s settle leaves ample room after the poll succeeds
+    // (bounded at 8 s) to still be mid-settle when SIGINT lands.
+    const pollDeadlineMs = 8000;
+    const pollStart = Date.now();
+    let midSettleWidth;
+    while (true) {
+      midSettleWidth = tmux('display', '-p', '-t', 'app:0.0', '#{window_width}');
+      if (midSettleWidth === '40') break;
+      if (Date.now() - pollStart > pollDeadlineMs) {
+        child.kill('SIGKILL');
+        assert.fail(`window_width did not reach 40 within ${pollDeadlineMs} ms (last read: ${midSettleWidth})`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
     child.kill('SIGINT');
     const { code, signal } = await exited;
     assert.equal(midSettleWidth, '40', 'the scan was mid-settle at 40 columns when SIGINT arrived');
