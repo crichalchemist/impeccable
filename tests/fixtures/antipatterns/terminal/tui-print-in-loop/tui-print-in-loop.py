@@ -3,7 +3,7 @@ from textual.worker import work
 
 class Demo(App):
     def on_mount(self) -> None:
-        print("hello")  # flag
+        print("hello")  # pass: Textual captures print while the app runs
         self.log("hello")  # pass
 
     @work(thread=True)
