@@ -470,7 +470,7 @@ fn scan_terminal_double_border(lines: &[&str], file_path: &str) -> Vec<Finding> 
 // ─── tui-hardcoded-rgb-no-adapt ─────────────────────────────────────────────
 re!(
     RGB_RE,
-    r##"Color::Rgb\((?:[ \t]*(?:0x[0-9a-fA-F]+|\d+)[ \t]*,){2}[ \t]*(?:0x[0-9a-fA-F]+|\d+)[ \t]*\)|Color::from_u32\(0x|lipgloss\.Color\("#|chalk\.hex\(|\bcolor=["']#|\[#[0-9a-fA-F]{6}\]|\\x1b\[38;2;|\\033\[38;2;|\x1b\[38;2;"##
+    r##"Color::Rgb\((?:[ \t]*(?:0x[0-9a-fA-F]+|\d+)[ \t]*,){2}[ \t]*(?:0x[0-9a-fA-F]+|\d+)[ \t]*\)|Color::from_u32\(0x|lipgloss\.Color\("#|\bchalk(?:\.[A-Za-z]+)*\.(?:hex|bgHex)\([ \t]*["']#|\bchalk(?:\.[A-Za-z]+)*\.(?:rgb|bgRgb)\([ \t]*\d|\bcolor=["']#|\[#[0-9a-fA-F]{6}\]|\\x1b\[38;2;|\\033\[38;2;|\x1b\[38;2;"##
 );
 /// The note `tui-hardcoded-rgb-no-adapt` carries when the project does have
 /// an adaptive color helper somewhere: the literal may still be themed.
@@ -929,6 +929,27 @@ mod tests {
             assert_eq!(ids(&scan(s, stack, Some(&NONE))), vec!["tui-hardcoded-rgb-no-adapt"], "{s}");
         }
         assert!(scan("let c = Color::Red;", Stack::Ratatui, Some(&NONE)).is_empty());
+    }
+
+    #[test]
+    fn chalk_is_flagged_only_for_a_literal_color() {
+        for src in [
+            "chalk.hex('#ff00aa')('x')",
+            "chalk.bold.hex(\"#ff00aa\")('x')",
+            "chalk.bgHex('#101010')('x')",
+            "chalk.rgb(255, 0, 170)('x')",
+            "chalk.underline.bgRgb(16, 16, 16)('x')",
+        ] {
+            assert_eq!(ids(&scan(src, Stack::Ink, Some(&NONE))), vec!["tui-hardcoded-rgb-no-adapt"], "{src}");
+        }
+        for src in [
+            "chalk.hex(theme.primary)('x')",
+            "chalk.bgHex(color)('x')",
+            "chalk.rgb(r, g, b)('x')",
+            "chalk.hex(`#${hex}`)('x')",
+        ] {
+            assert!(scan(src, Stack::Ink, Some(&NONE)).is_empty(), "a computed argument is not a hardcoded color: {src}");
+        }
     }
 
     #[test]
