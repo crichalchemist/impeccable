@@ -233,7 +233,7 @@ None. The dominant false-positive source found (`-J` line-joining, above) is an 
 
 ## PR 4 re-run
 
-Date: 2026-09-25 16:58 CDT. Branch `terminal-platform-pr4`, commit `d2d4d12f`. Binary: `target/release/impeccable`, built from that commit (PR 4's item 1 box-drawing gate, item 7 pager-prompt exemption, and item 8 `paletteRelative` are all present in the scanned binary). Scratch tmux server, socket `impeccable-rt-pass-pr4`, kept separate from the user's own `cockpit` session on the default socket throughout. `tmux -V`: `tmux 3.7c`, same as the PR 3 pass.
+Date: 2026-09-25. Branch `terminal-platform-pr4`, commit `d2d4d12f`. Binary: `target/release/impeccable`, built from that commit (PR 4's item 1 box-drawing gate, item 7 pager-prompt exemption, and item 8 `paletteRelative` are all present in the scanned binary). Scratch tmux server, socket `impeccable-rt-pass-pr4`, run under its own `-L` throughout; none of the five staged programs ran on the default socket. `tmux -V`: `tmux 3.7c`, same as the PR 3 pass.
 
 Same five programs as PR 3, same versions: macOS `top`, `vim --clean README.md` (`VIM - Vi IMproved 9.0`), `less CLAUDE.md` (`less 581.2`), `man tmux`, and ratatui's `demo2` example. **`demo2`'s build outcome**: no build was run. Per controller ruling C3, the release binary already existed at `$R/target/release/demo2` (ratatui checkout `21324fe8f1c5dcf10c709cbc1cd77d67fca46926`, the same commit and the same binary PR 3 built, staged this pass without a rebuild). `demo2` opens on its default Recipe tab, which (re-checked in `tabs/recipe.rs`) still calls `Block::new()` with no `.borders(...)`, so this pass again scans a `demo2` screen with no box-drawing glyphs in it.
 
@@ -282,4 +282,4 @@ None. This re-run's findings confirm PR 4's `crates/terminal` changes already la
 
 ### Teardown (PR 4 re-run)
 
-`tmux -L impeccable-rt-pass-pr4 kill-server`, followed by `tmux ls` on the default socket, confirming only `cockpit` remained.
+`tmux -L impeccable-rt-pass-pr4 kill-server`; the scratch socket no longer answers.
