@@ -1,3 +1,4 @@
+.remember/
 # Dependencies
 node_modules/
 
@@ -141,3 +142,4 @@ tmp/
 # PNGs, the old card backup). The canonical generator is `bun run og-image`
 # (scripts/generate-og-image.js); this dir is throwaway and safe to delete.
 .og-build/
+.serena/
