@@ -274,18 +274,58 @@ fn mode_of(values: &[usize]) -> Option<usize> {
     best.filter(|&(_, count)| count >= 2).map(|(v, _)| v)
 }
 
+/// What a row wider than its frame is (spec section 7, PR 4 item 1). Each
+/// row gets exactly one verdict, shared by width drift and narrow collapse;
+/// `line` and `column` index the joined frame `capture-pane -J` returns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Overflow {
+    /// No wider than the frame.
+    Fits,
+    /// The overflow is no larger than the row's count of wide glyphs: the
+    /// app measured some of them as one cell. Any frame width.
+    WidthDrift,
+    /// Otherwise, in a frame under 60 columns, a row holding a Box Drawing
+    /// glyph: the layout itself overflowed.
+    Collapse,
+    /// Anything else, such as prose the terminal wrapped and `-J` joined.
+    Wrapped,
+}
+
+fn is_box_drawing(ch: char) -> bool {
+    ('\u{2500}'..='\u{257F}').contains(&ch)
+}
+
+pub fn overflow_verdict(frame: &Frame, r: usize) -> Overflow {
+    let w = frame.row_width(r);
+    if frame.width == 0 || w <= frame.width {
+        return Overflow::Fits;
+    }
+    if w - frame.width <= frame.wide_count(r) {
+        return Overflow::WidthDrift;
+    }
+    let boxed = frame.rows[r].iter().any(|c| c.glyph.map(is_box_drawing).unwrap_or(false));
+    if frame.width < NARROW_COLUMNS && boxed {
+        Overflow::Collapse
+    } else {
+        Overflow::Wrapped
+    }
+}
+
 pub fn rt_width_drift(frame: &Frame, file: &str) -> Vec<Finding> {
     let mut out = Vec::new();
     let ends: Vec<usize> = (0..frame.rows.len()).filter_map(|r| last_vertical(frame, r)).collect();
     let usual_end = mode_of(&ends);
     for r in 0..frame.rows.len() {
-        if !frame.has_wide(r) {
-            continue;
+        match overflow_verdict(frame, r) {
+            Overflow::WidthDrift => {
+                let snippet = format!("row measures {} cells on a {}-column pane", frame.row_width(r), frame.width);
+                out.push(rt_finding("tui-rt-width-drift", file, frame, r, frame.width, snippet));
+                continue;
+            }
+            Overflow::Fits => {}
+            Overflow::Collapse | Overflow::Wrapped => continue,
         }
-        let w = frame.row_width(r);
-        if frame.width > 0 && w > frame.width {
-            let snippet = format!("row measures {w} cells on a {}-column pane", frame.width);
-            out.push(rt_finding("tui-rt-width-drift", file, frame, r, frame.width, snippet));
+        if !frame.has_wide(r) {
             continue;
         }
         if let (Some(end), Some(usual)) = (last_vertical(frame, r), usual_end) {
@@ -306,10 +346,14 @@ pub fn rt_collapse_narrow(frame: &Frame, file: &str) -> Vec<Finding> {
             continue;
         }
         let w = row.len();
-        if frame.width > 0 && w > frame.width {
-            let snippet = format!("row overflows the {}-column pane by {} cells", frame.width, w - frame.width);
-            out.push(rt_finding("tui-rt-collapse-narrow", file, frame, r, frame.width, snippet));
-            continue;
+        match overflow_verdict(frame, r) {
+            Overflow::Collapse => {
+                let snippet = format!("row overflows the {}-column pane by {} cells", frame.width, w - frame.width);
+                out.push(rt_finding("tui-rt-collapse-narrow", file, frame, r, frame.width, snippet));
+                continue;
+            }
+            Overflow::Fits => {}
+            Overflow::WidthDrift | Overflow::Wrapped => continue,
         }
         let text = frame.text(r);
         let has_left = text.chars().any(|g| TOP_LEFT.contains(g) || BOTTOM_LEFT.contains(g));
@@ -540,5 +584,54 @@ pub(crate) mod tests {
         assert!(out.iter().all(|f| f.advisory == Some(true) && f.file == "tmux:app:0.0"));
         let wide = frame(80, &["┌──────────────────────────────────────────────────────────────────────────────────────┐", "text", HINTS]);
         assert!(!ids(&scan_frames(&[wide], Palette::Dark, "x")).contains(&"tui-rt-collapse-narrow"), "80 columns is not narrow");
+    }
+
+    const PROSE: &str = "The quick brown fox jumps over the lazy dog while the index rebuilds in the background.";
+
+    #[test]
+    fn joined_prose_row_under_sixty_columns_reports_nothing() {
+        let f = frame(40, &[&format!("┌{}┐", "─".repeat(38)), &format!("└{}┘", "─".repeat(38)), PROSE, HINTS]);
+        assert_eq!(overflow_verdict(&f, 2), Overflow::Wrapped);
+        assert!(rt_collapse_narrow(&f, "x").is_empty(), "a row -J joined is the terminal's wrap");
+        assert!(rt_width_drift(&f, "x").is_empty());
+    }
+
+    #[test]
+    fn emoji_overflow_under_sixty_columns_is_width_drift_only() {
+        let top = format!("┌{}┐", "─".repeat(38));
+        let rocket = format!("│ 🚀 launch{}│", " ".repeat(29)); // 1 + 1 + 2 + 7 + 29 + 1 = 41 cells
+        let bottom = format!("└{}┘", "─".repeat(38));
+        let f = frame(40, &[&top, &rocket, &bottom, HINTS]);
+        assert_eq!(f.row_width(1), 41);
+        assert_eq!(overflow_verdict(&f, 1), Overflow::WidthDrift);
+        let out = scan_frames(&[f], Palette::Dark, "x");
+        assert_eq!(ids(&out), vec!["tui-rt-width-drift"], "one verdict per row: no collapse beside the drift");
+        assert_eq!(out[0].snippet, "row measures 41 cells on a 40-column pane");
+    }
+
+    #[test]
+    fn heart_with_emoji_presentation_counts_as_one_wide_glyph() {
+        let one_over = frame(40, &[&format!("│ ❤\u{FE0F} ok{}│", " ".repeat(33))]); // 1 + 1 + 2 + 3 + 33 + 1 = 41
+        assert_eq!((one_over.row_width(0), one_over.wide_count(0)), (41, 1));
+        assert_eq!(overflow_verdict(&one_over, 0), Overflow::WidthDrift);
+        let two_over = frame(40, &[&format!("│ ❤\u{FE0F} ok{}│", " ".repeat(34))]);
+        assert_eq!(overflow_verdict(&two_over, 0), Overflow::Collapse, "42 cells with one wide glyph is more than drift");
+    }
+
+    #[test]
+    fn boxed_overflow_under_sixty_columns_is_collapse_only() {
+        let f = frame(40, &[&format!("┌{}┐", "─".repeat(48)), HINTS]);
+        assert_eq!(overflow_verdict(&f, 0), Overflow::Collapse);
+        assert_eq!(ids(&rt_collapse_narrow(&f, "x")), vec!["tui-rt-collapse-narrow"]);
+        assert!(rt_width_drift(&f, "x").is_empty());
+    }
+
+    #[test]
+    fn overflow_past_the_wide_glyph_count_at_sixty_columns_or_more_reports_nothing() {
+        // A joined row in a wide frame: one emoji plus prose the terminal wrapped.
+        let f = frame(80, &[&format!("│ 🚀 {}", "word ".repeat(20)), HINTS]); // 105 cells on 80
+        assert_eq!(overflow_verdict(&f, 0), Overflow::Wrapped);
+        assert!(rt_width_drift(&f, "x").is_empty());
+        assert_eq!(overflow_verdict(&f, 1), Overflow::Fits);
     }
 }
