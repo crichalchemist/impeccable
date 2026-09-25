@@ -93,12 +93,16 @@ impl Frame {
 pub const HEADER: &str = "#!capture";
 
 /// Rows of captured text into cells. A trailing newline does not add a row.
+/// tmux's `capture-pane -e` diffs SGR against one running cell state for the
+/// whole capture, so a style set on one row and unchanged on the next carries
+/// forward; the style is not reset between rows.
 pub fn parse_rows(text: &str) -> Vec<Vec<Cell>> {
     let mut lines: Vec<&str> = text.split('\n').collect();
     if lines.last() == Some(&"") {
         lines.pop();
     }
-    lines.into_iter().map(parse_row).collect()
+    let mut style = Style::default();
+    lines.into_iter().map(|line| parse_row(line, &mut style)).collect()
 }
 
 /// A saved capture file into frames: every `#!capture` line starts a frame;
@@ -123,7 +127,10 @@ pub fn parse_frames(text: &str) -> Result<Vec<Frame>, String> {
         if let Some(h) = header {
             apply_header(&mut frame, h)?;
         }
-        frame.rows = lines.into_iter().map(parse_row).collect();
+        // Every `#!capture` header starts a new frame, so the carried style
+        // resets here rather than continuing from the previous frame.
+        let mut style = Style::default();
+        frame.rows = lines.into_iter().map(|line| parse_row(line, &mut style)).collect();
         if frame.width == 0 {
             frame.width = frame.rows.iter().map(Vec::len).max().unwrap_or(0);
         }
@@ -166,29 +173,59 @@ fn apply_header(frame: &mut Frame, header: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// One captured row. SGR sequences update the style; every other character
-/// is a cell (zero-width characters take none, two-column glyphs take two).
-pub fn parse_row(line: &str) -> Vec<Cell> {
+/// One captured row. SGR sequences update `style` (carried in from, and left
+/// for, the caller); every other character is a cell (zero-width characters
+/// take none, two-column glyphs take two). Non-CSI escapes (OSC hyperlinks,
+/// DCS/SOS/PM/APC strings, and anything else two-byte) are skipped rather
+/// than leaked as cells, and a CSI with a private parameter byte is ignored.
+fn parse_row(line: &str, style: &mut Style) -> Vec<Cell> {
     let mut cells = Vec::new();
-    let mut style = Style::default();
     let mut chars = line.chars().peekable();
     while let Some(ch) = chars.next() {
         if ch == '\x1b' {
-            if chars.peek() == Some(&'[') {
-                chars.next();
-                let mut params = String::new();
-                let mut terminator = None;
-                for c in chars.by_ref() {
-                    if c.is_ascii_digit() || c == ';' || c == ':' {
-                        params.push(c);
-                    } else {
-                        terminator = Some(c);
-                        break;
+            match chars.peek() {
+                Some('[') => {
+                    chars.next();
+                    let mut params = String::new();
+                    let mut private = false;
+                    // Parameter bytes: 0x30..=0x3F (digits, `:`, `;`, and the
+                    // private markers `<`, `=`, `>`, `?`).
+                    while let Some(&c) = chars.peek() {
+                        if !('\x30'..='\x3f').contains(&c) {
+                            break;
+                        }
+                        chars.next();
+                        if matches!(c, '<' | '=' | '>' | '?') {
+                            private = true;
+                        } else {
+                            params.push(c);
+                        }
+                    }
+                    // Intermediate bytes: 0x20..=0x2F.
+                    while let Some(&c) = chars.peek() {
+                        if !('\x20'..='\x2f').contains(&c) {
+                            break;
+                        }
+                        chars.next();
+                    }
+                    // Final byte: 0x40..=0x7E.
+                    let final_byte = chars.next();
+                    if final_byte == Some('m') && !private {
+                        apply_sgr(style, &params);
                     }
                 }
-                if terminator == Some('m') {
-                    apply_sgr(&mut style, &params);
+                Some(']') => {
+                    chars.next();
+                    skip_string(&mut chars, true);
                 }
+                Some('P') | Some('X') | Some('^') | Some('_') => {
+                    chars.next();
+                    skip_string(&mut chars, false);
+                }
+                Some(_) => {
+                    chars.next();
+                }
+                None => {}
             }
             continue;
         }
@@ -197,19 +234,36 @@ pub fn parse_row(line: &str) -> Vec<Cell> {
         }
         match ch.width().unwrap_or(0) {
             0 => {}
-            1 => cells.push(Cell { glyph: Some(ch), wide_tail: false, style }),
+            1 => cells.push(Cell { glyph: Some(ch), wide_tail: false, style: *style }),
             _ => {
-                cells.push(Cell { glyph: Some(ch), wide_tail: false, style });
-                cells.push(Cell { glyph: None, wide_tail: true, style });
+                cells.push(Cell { glyph: Some(ch), wide_tail: false, style: *style });
+                cells.push(Cell { glyph: None, wide_tail: true, style: *style });
             }
         }
     }
     cells
 }
 
+/// Skip an OSC (`allow_bel`) or DCS/SOS/PM/APC string to its terminator: BEL
+/// (OSC only) or the two-byte string terminator `ESC \`. Neither appearing
+/// skips to the end of the row.
+fn skip_string(chars: &mut std::iter::Peekable<std::str::Chars<'_>>, allow_bel: bool) {
+    while let Some(c) = chars.next() {
+        if allow_bel && c == '\x07' {
+            return;
+        }
+        if c == '\x1b' && chars.peek() == Some(&'\\') {
+            chars.next();
+            return;
+        }
+    }
+}
+
 /// The SGR parameters tmux emits: reset, bold, dim, blink, reverse and their
-/// offs, the 16 named colors, `38;5;n` / `48;5;n`, `38;2;r;g;b` / `48;2;r;g;b`.
-/// Anything else is ignored.
+/// offs, the 16 named colors, `38;5;n` / `48;5;n`, `38;2;r;g;b` / `48;2;r;g;b`,
+/// and `58;5;n` / `58;2;r;g;b` (underline color: consumed so its parameters
+/// are never misread as ordinary codes, but not applied to `style`, which has
+/// no underline-color slot). Anything else is ignored.
 fn apply_sgr(style: &mut Style, params: &str) {
     let parts: Vec<&str> = if params.is_empty() { vec!["0"] } else { params.split([';', ':']).collect() };
     let num = |i: usize| parts.get(i).and_then(|p| p.parse::<u16>().ok());
@@ -237,7 +291,13 @@ fn apply_sgr(style: &mut Style, params: &str) {
             40..=47 => style.bg = Color::Indexed((p - 40) as u8),
             100..=107 => style.bg = Color::Indexed((p - 100 + 8) as u8),
             49 => style.bg = Color::Default,
-            38 | 48 => {
+            // 58 (underline color) takes the same `;5;n` / `;2;r;g;b` shape
+            // as 38/48 and must consume the same parameters, but tmux has no
+            // underline-color slot on `Style` to store it in: the value is
+            // read and discarded so it never falls through to `_` and gets
+            // misread as ordinary SGR codes (issue: undercurl colors from
+            // Neovim/Helix were resetting fg/bg).
+            38 | 48 | 58 => {
                 let color = match num(i + 1) {
                     Some(5) => {
                         let index = num(i + 2).unwrap_or(0).min(255) as u8;
@@ -256,10 +316,10 @@ fn apply_sgr(style: &mut Style, params: &str) {
                     _ => None,
                 };
                 if let Some(c) = color {
-                    if p == 38 {
-                        style.fg = c
-                    } else {
-                        style.bg = c
+                    match p {
+                        38 => style.fg = c,
+                        48 => style.bg = c,
+                        _ => {}
                     }
                 }
             }
@@ -272,6 +332,11 @@ fn apply_sgr(style: &mut Style, params: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A row parsed on its own, starting (and ending) with a default style.
+    fn parse_row(line: &str) -> Vec<Cell> {
+        super::parse_row(line, &mut Style::default())
+    }
 
     #[test]
     fn sgr_colors_and_attributes_land_on_the_cells_they_precede() {
@@ -336,5 +401,58 @@ mod tests {
         assert_eq!(parse_frames("#!capture role=third\n").unwrap_err(), "capture header: unknown role \"third\"");
         assert_eq!(parse_frames("#!capture depth=8\n").unwrap_err(), "capture header: unknown key \"depth\"");
         assert_eq!(parse_frames("#!capture width\n").unwrap_err(), "capture header: expected key=value, got \"width\"");
+    }
+
+    #[test]
+    fn background_set_on_one_row_still_applies_on_the_next() {
+        // tmux's `capture-pane -e` diffs SGR against one running cell state
+        // for the whole capture: a background set on row N and unchanged on
+        // row N+1 gets no SGR on row N+1, so the parser must carry it.
+        let rows = parse_rows("\x1b[48;5;15mA\nB");
+        assert_eq!(rows[0][0].style.bg, Color::Indexed(15));
+        assert_eq!(rows[1][0].style.bg, rows[0][0].style.bg, "row 2 inherits row 1's background");
+    }
+
+    #[test]
+    fn a_new_frame_header_resets_the_carried_style() {
+        let text = "#!capture width=1 height=1\n\x1b[48;5;15mA\n#!capture width=1 height=1\nB\n";
+        let frames = parse_frames(text).unwrap();
+        assert_eq!(frames[0].rows[0][0].style.bg, Color::Indexed(15));
+        assert_eq!(frames[1].rows[0][0].style, Style::default(), "a new #!capture header starts clean");
+    }
+
+    #[test]
+    fn an_osc_8_hyperlink_adds_no_cells() {
+        let cells = super::parse_row("\x1b]8;;https://example.com\x1b\\link\x1b]8;;\x1b\\ tail", &mut Style::default());
+        assert_eq!(cells.len(), 9);
+        let frame = Frame { rows: vec![cells], ..Frame::default() };
+        assert_eq!(frame.row_width(0), 9);
+        assert_eq!(frame.text(0), "link tail");
+    }
+
+    #[test]
+    fn a_private_csi_adds_no_cells() {
+        let cells = super::parse_row("\x1b[?25l hidden \x1b[?25h", &mut Style::default());
+        let frame = Frame { rows: vec![cells], ..Frame::default() };
+        assert_eq!(frame.row_width(0), 8);
+        assert_eq!(frame.text(0), " hidden ");
+    }
+
+    #[test]
+    fn an_osc_terminated_by_bel_adds_no_cells() {
+        let cells = super::parse_row("\x1b]0;title\x07x", &mut Style::default());
+        assert_eq!(cells.len(), 1);
+        assert_eq!(cells[0].glyph, Some('x'));
+    }
+
+    #[test]
+    fn underline_color_parameters_do_not_reset_the_cell_colors() {
+        // SGR 58 (underline color, `58;5;n` / `58;2;r;g;b`) shares the
+        // sub-parameter shape of 38/48 but tmux has no slot to store it in;
+        // its parameters must be consumed, not read as ordinary SGR codes.
+        let cells = parse_row("\x1b[38;5;15m\x1b[48;5;4m\x1b[58;2;255;0;0mX");
+        assert_eq!(cells[0].style.fg, Color::Indexed(15));
+        assert_eq!(cells[0].style.bg, Color::Indexed(4));
+        assert!(!cells[0].style.dim, "the underline-color RGB channels must not be read as SGR 2 (dim)");
     }
 }

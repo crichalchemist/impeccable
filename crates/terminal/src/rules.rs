@@ -111,7 +111,11 @@ pub fn rt_low_contrast(frame: &Frame, palette: Palette, file: &str) -> Vec<Findi
                 .flatten()
                 .filter(|x| x.glyph.map(is_text).unwrap_or(false) && palette.resolve(&x.style) == (fg, bg))
                 .count();
-            let snippet = format!("\"{run}\" {} on {}: {ratio:.1}:1 (need 4.5:1)", key.0, key.1);
+            // Truncate rather than round: a 4.478 ratio must print as "4.4:1"
+            // rather than round up to a misleading "4.5:1" (the floor it just
+            // missed).
+            let shown = (ratio * 10.0).floor() / 10.0;
+            let snippet = format!("\"{run}\" {} on {}: {shown:.1}:1 (need 4.5:1)", key.0, key.1);
             let mut f = rt_finding("tui-rt-low-contrast", file, frame, r, c, snippet);
             f.extras.insert("cellCount".into(), Value::from(count));
             out.push(f);
@@ -337,6 +341,7 @@ pub fn rt_collapse_narrow(frame: &Frame, file: &str) -> Vec<Finding> {
 pub(crate) mod tests {
     use super::*;
     use crate::capture::parse_rows;
+    use impeccable_core::color::Rgba;
 
     pub(crate) fn frame(width: usize, rows: &[&str]) -> Frame {
         Frame { width, height: rows.len(), rows: parse_rows(&rows.join("\n")), ..Frame::default() }
@@ -373,6 +378,25 @@ pub(crate) mod tests {
         assert_eq!(dark.len(), 1);
         assert_eq!(dark[0].snippet, "\"black on default\" #000000 on #000000: 1.0:1 (need 4.5:1)");
         assert!(rt_low_contrast(&f, Palette::Light, "x").is_empty());
+    }
+
+    #[test]
+    fn a_ratio_just_under_the_floor_never_prints_as_the_floor() {
+        // 4.478 must print "4.4:1", not round up to "4.5:1" (the floor it
+        // just missed) and read as if it passed.
+        let white = Rgba { r: 255.0, g: 255.0, b: 255.0, a: None };
+        let gray = (100..140)
+            .find(|&g| {
+                let c = Rgba { r: g as f64, g: g as f64, b: g as f64, a: None };
+                let ratio = contrast_ratio(&c, &white);
+                (4.45..4.5).contains(&ratio)
+            })
+            .expect("a gray in 100..140 with a ratio between 4.45 and 4.5");
+        let sgr = format!("\x1b[38;2;{gray};{gray};{gray};48;2;255;255;255m");
+        let f = frame(40, &[&format!("{sgr}faint\x1b[0m"), HINTS]);
+        let out = rt_low_contrast(&f, Palette::Dark, "x");
+        assert_eq!(out.len(), 1, "{:?}", ids(&out));
+        assert!(!out[0].snippet.contains("4.5:1 (need"), "{}", out[0].snippet);
     }
 
     #[test]
