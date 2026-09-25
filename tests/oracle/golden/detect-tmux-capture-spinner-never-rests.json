@@ -1,5 +1,5 @@
 {
-  "stdout": "[\n  {\n    \"antipattern\": \"tui-rt-spinner-never-rests\",\n    \"name\": \"Spinner still cycling with no input\",\n    \"description\": \"A spinner glyph keeps changing across two captures a second apart with nothing to wait for. Show a spinner only while work is pending and replace it with the result.\",\n    \"severity\": \"advisory\",\n    \"category\": \"quality\",\n    \"file\": \"<REPO>/tests/fixtures/terminal-captures/spinner-never-rests.txt\",\n    \"line\": 2,\n    \"snippet\": \"spinner glyph ⠋ became ⠙ after one second with no input\",\n    \"advisory\": true,\n    \"column\": 11,\n    \"frame\": \"40x5\"\n  }\n]\n",
+  "stdout": "[\n  {\n    \"antipattern\": \"tui-rt-spinner-never-rests\",\n    \"name\": \"Spinner still cycling with no input\",\n    \"description\": \"A spinner glyph keeps changing across captures taken within one second with nothing to wait for. Show a spinner only while work is pending and replace it with the result.\",\n    \"severity\": \"advisory\",\n    \"category\": \"quality\",\n    \"file\": \"<REPO>/tests/fixtures/terminal-captures/spinner-never-rests.txt\",\n    \"line\": 2,\n    \"snippet\": \"spinner glyph ⠋ became ⠙ between captures with no input\",\n    \"advisory\": true,\n    \"column\": 11,\n    \"frame\": \"40x5\"\n  }\n]\n",
   "stderr": "",
   "exit": 0,
   "signal": null,

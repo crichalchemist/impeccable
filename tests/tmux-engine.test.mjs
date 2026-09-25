@@ -8,7 +8,7 @@
  */
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -58,6 +58,51 @@ describe('tmux engine against a scratch server', { skip: !BIN ? ENGINE_MISSING_M
     assert.ok(findings.some((f) => f.antipattern === 'tui-rt-collapse-narrow' && f.frame === '40x24'), 'the 40-column frame collapses');
     assert.ok(findings.every((f) => f.file === 'tmux:app:0.0' && f.advisory === true));
     assert.equal(tmux('display', '-p', '-t', 'app:0.0', '#{window_width}x#{window_height} #{window-size}'), '80x24 latest', 'window size and mode restored');
+  });
+
+  it('puts back a window-size the user had set before the scan', () => {
+    tmux('set-option', '-w', '-t', 'app:0.0', 'window-size', 'largest');
+    try {
+      const r = detect('--json', '--tmux', 'app:0.0', '--tmux-sizes', '40x24');
+      assert.equal(r.status, 0, r.stderr);
+      assert.equal(tmux('display', '-p', '-t', 'app:0.0', '#{window_width}x#{window_height} #{window-size}'), '80x24 largest', 'size and the user value restored');
+    } finally {
+      tmux('set-option', '-w', '-t', 'app:0.0', '-u', 'window-size');
+    }
+  });
+
+  it('restores the window and fails loudly when SIGINT lands during the size pass', async () => {
+    const child = spawn(BIN, ['detect', '--no-config', '--tmux', 'app:0.0', '--tmux-sizes', '40x24', '--tmux-settle', '12000'], {
+      env: engineEnv(BIN, { IMPECCABLE_TMUX: wrapper }),
+    });
+    let stderr = '';
+    child.stderr.setEncoding('utf8').on('data', (d) => { stderr += d; });
+    const exited = new Promise((resolve) => child.on('exit', (code, signal) => resolve({ code, signal })));
+    // Frame 0, the recaptures (1000 ms), show-options, and the resize land
+    // the pane at 40 columns before the settle starts; poll for it instead of
+    // trusting a fixed wait, so the test does not flake under load. Read the
+    // width before signalling, so a failed assertion never leaves the child
+    // running. The 12 s settle leaves ample room after the poll succeeds
+    // (bounded at 8 s) to still be mid-settle when SIGINT lands.
+    const pollDeadlineMs = 8000;
+    const pollStart = Date.now();
+    let midSettleWidth;
+    while (true) {
+      midSettleWidth = tmux('display', '-p', '-t', 'app:0.0', '#{window_width}');
+      if (midSettleWidth === '40') break;
+      if (Date.now() - pollStart > pollDeadlineMs) {
+        child.kill('SIGKILL');
+        assert.fail(`window_width did not reach 40 within ${pollDeadlineMs} ms (last read: ${midSettleWidth})`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    child.kill('SIGINT');
+    const { code, signal } = await exited;
+    assert.equal(midSettleWidth, '40', 'the scan was mid-settle at 40 columns when SIGINT arrived');
+    assert.equal(signal, null, 'the engine caught SIGINT instead of dying');
+    assert.equal(code, 1, stderr);
+    assert.match(stderr, /^Error: interrupted; window restored$/m);
+    assert.equal(tmux('display', '-p', '-t', 'app:0.0', '#{window_width}x#{window_height} #{window-size}'), '80x24 latest', 'restored after the interrupt');
   });
 
   it('reports an unknown pane as an operational failure and touches nothing', () => {

@@ -230,3 +230,56 @@ None. The dominant false-positive source found (`-J` line-joining, above) is an 
 ## Teardown
 
 `tmux -L impeccable-rt-pass kill-server`, twice (once after the main pass, once after the correction round's follow-up server), each followed by `tmux ls` on the default socket, which confirmed only `cockpit` remained both times.
+
+## PR 4 re-run
+
+Date: 2026-09-25. Branch `terminal-platform-pr4`, commit `d2d4d12f`. Binary: `target/release/impeccable`, built from that commit (PR 4's item 1 box-drawing gate, item 7 pager-prompt exemption, and item 8 `paletteRelative` are all present in the scanned binary). Scratch tmux server, socket `impeccable-rt-pass-pr4`, run under its own `-L` throughout; none of the five staged programs ran on the default socket. `tmux -V`: `tmux 3.7c`, same as the PR 3 pass.
+
+Same five programs as PR 3, same versions: macOS `top`, `vim --clean README.md` (`VIM - Vi IMproved 9.0`), `less CLAUDE.md` (`less 581.2`), `man tmux`, and ratatui's `demo2` example. **`demo2`'s build outcome**: no build was run. Per controller ruling C3, the release binary already existed at `$R/target/release/demo2` (ratatui checkout `21324fe8f1c5dcf10c709cbc1cd77d67fca46926`, the same commit and the same binary PR 3 built, staged this pass without a rebuild). `demo2` opens on its default Recipe tab, which (re-checked in `tabs/recipe.rs`) still calls `Block::new()` with no `.borders(...)`, so this pass again scans a `demo2` screen with no box-drawing glyphs in it.
+
+### Hits per program (full three-size sweep, `--tmux-sizes 80x24,120x40,40x24`)
+
+| Window | Total | collapse-narrow (PR 3) | collapse-narrow (PR 4) | Other rules (PR 4) |
+|---|---|---|---|---|
+| `top` | 3 | 2 | 2 | `tui-rt-no-key-hints` 1 |
+| `vim` | 3 | 4 | 0 | `tui-rt-low-contrast` 2, `tui-rt-no-key-hints` 1 |
+| `less` | 0 | 3 | 0 | none |
+| `man` | 0 | 6 | 0 | none |
+| `demo2` | 3 | 0 | 0 | `tui-rt-low-contrast` 3 |
+
+**`tui-rt-collapse-narrow` total: 2, against PR 3's 15 (a drop of 13, an 87% reduction).** All exits were 0, every `.json` file parsed, and every finding's `severity` field reads `advisory` (checked programmatically across all five files); rules stay `advisory` in this PR too, as the brief requires. Scan times (`/usr/bin/time -p`, same three-size sweep as PR 3): `top` 2.73s real, `vim` 2.37s, `less` 2.34s, `man` 2.35s, `demo2` 2.31s (PR 3's were ~2.2s each; the difference is consistent with PR 4's two recaptures and settle-wait polling, not a regression worth chasing further here).
+
+### The 2 remaining collapse-narrow findings, judged
+
+Both are on `top`, both are the same word-split branch PR 3 already classified as arguable, and the brief's own item 1 explains why they survive: "Collapse-narrow's corner and split-word checks are unchanged." The box-drawing gate (item 1) only narrows the *overflow* branch (`overflow_verdict`, `rules.rs:324`); the word-split and corner checks sit behind `Overflow::Fits` (`rules.rs:375`), reached only when a row does *not* overflow the pane at all, so the gate never touches them.
+
+| Program | Line | Col | Frame | Snippet | Class | Reason |
+|---|---|---|---|---|---|---|
+| `top` | 1 | 40 | 40x24 | `word split at the pane edge: "ng, 726 sle"` | arguable | Confirmed directly with a separate 40x24 capture (a few minutes later, so `top`'s own live counters read differently, e.g. "723 sle"): `top`'s row is 40 cells with and without `-J` (identical), i.e. `top` truncates rather than wraps; the follow-on continuation on the next row is an unrelated `MemRegions:` stat line, not "eeping". Real content is lost, but the rule's stated word-split mechanism ("wrapped across the row boundary") did not literally happen; "sle" + a next row starting with a letter is coincidental, same finding PR 3 made |
+| `top` | 5 | 40 | 40x24 | `word split at the pane edge: "d, 487M com"` | arguable | Same mechanism as above (PR 3's sample read `"d, 767M com"`); `top`'s live process/memory counters change second to second, so the exact digits differ from PR 3's sample, but the truncation-not-wrap behavior is identical |
+
+**0 of 2 are the "border loses its right corner" branch and 0 are overflow**; the box-drawing gate correctly suppressed every overflow-branch finding this pass (13 of PR 3's 15), leaving only the two word-split findings the spec explicitly says are unchanged.
+
+### The key-hint change on `less`, `man`, and `top`
+
+- **`man`: confirmed cleanly.** `man`'s bottom row is exactly `:` (the pager prompt) at all three scanned sizes (80x24, 120x40, 40x24), verified directly with `tmux capture-pane -p -e -J -t pass:man | tail`. `man` produced 0 `tui-rt-no-key-hints` findings across the full sweep (PR 3 had 1). This is a clean, direct confirmation of item 7's `is_pager_prompt` path (`rules.rs:168-169`, `text.trim_end() == ":"`).
+- **`top`: unaffected, as expected.** `top`'s bottom row is still the scrolling process table, not a footer, and `tui-rt-no-key-hints` still fires once (same as PR 3). Confirmed the finding is real by capturing `top`'s current bottom row directly; it names no key.
+- **`less`: cannot be cleanly tested here, same caveat PR 3 recorded.** This `less` window is not at end-of-file and was not run with `-M`, so unlike `man`, its bottom row was never a bare `:` prompt at any of the three sizes tested; re-verified directly this pass (bottom rows were ordinary wrapped `CLAUDE.md`/`README.md` prose ending mid-sentence at all three sizes). `less` produced 0 `tui-rt-no-key-hints` findings (PR 3 had 0 too, for the same underlying reason), so the count did not change, but tracing *why* it stayed silent shows two different, unrelated mechanisms rather than the item 7 pager-prompt path: at 40x24 the joined bottom row happens to contain the token `<command>` (from `` `<command>.md` `` in `README.md`), which matches `KEY_HINT_RE`'s angle-bracket clause (`<[^>\s]{1,12}>`) by coincidence, not because it names a real key; at 80x24 and 120x40 a follow-up manual re-check of the same window did not reproduce a key-hint or pager-prompt match against the captured text either, and `less`'s own scroll position is known to shift slightly across repeated resizes of the same window, so a manual re-check run minutes after the original detect scan is not guaranteed to see byte-identical content. Net: `less`'s absence of a finding is real and reproducible as a count, but this pass cannot say it demonstrates item 7's `:`-prompt exemption the way `man` does, because `less`'s content here is never actually that prompt.
+
+### The largest-window-size restore check
+
+Per Step 2's required check: `tmux set-option -w -t pass:less window-size largest`, then a scan (`--tmux-sizes 40x24`), then `tmux display -p -t pass:less '#{window_width}x#{window_height} #{window-size}'` read back `100x30 largest`, exactly the expected value (spec item 5: a non-empty `show-options` read is restored with `set-option -w -t <target> window-size <value>`, not `-u`). `pass:top`, never touched by this check, read `100x30 latest` at the same moment, confirming the check did not leak across windows. This directly exercises the restore-value half of item 5 that the corresponding `tests/tmux-engine.test.mjs` case also covers.
+
+The plain restore check (engine scan only, no `largest` override) was also re-confirmed directly on `top`: `100x30 latest`, both immediately after the Step 2 sweep and again after the manual 40x24 word-split verification capture (resized manually, then restored with `resize-window -x 100 -y 30` + `set-option -w -t pass:top -u window-size`), matching PR 3's isolated-restore finding.
+
+### Summary against PR 3's gate record
+
+`tui-rt-collapse-narrow` dropped from 15 to 2 (87% reduction), and both survivors are the pre-existing word-split arguables the spec says item 1 leaves untouched, not new false positives. `tui-rt-no-key-hints` dropped from 3 to 2, with `man`'s drop directly attributable to and confirming item 7's pager-prompt exemption; `less`'s unchanged 0-count is coincidental rather than a confirmation of the same mechanism. `tui-rt-low-contrast` is unchanged (5 hits total, the same two programs as PR 3, `vim` 2 and `demo2` 3), and now carries the `paletteRelative` extra exactly as item 8 specifies: `false` on `demo2`'s three absolute-RGB findings, `true` on `vim`'s two named-ANSI-color findings, matching PR 3's manual judgment call ("vim's two use named ANSI colors... which is correct behavior... but means the finding is relative to that assumption") without needing a human to re-derive it by hand this time. All rules stay `advisory` in this PR, per the brief.
+
+### Fixes made (PR 4 re-run)
+
+None. This re-run's findings confirm PR 4's `crates/terminal` changes already landed correctly (the box-drawing gate, the pager-prompt exemption, and `paletteRelative`); no new bug was exposed on these five programs, so no `crates/terminal` source changed and no `detect-tmux-*` golden was re-recorded.
+
+### Teardown (PR 4 re-run)
+
+`tmux -L impeccable-rt-pass-pr4 kill-server`; the scratch socket no longer answers.

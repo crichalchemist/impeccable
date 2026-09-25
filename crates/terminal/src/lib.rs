@@ -10,8 +10,9 @@ pub mod rules;
 pub mod tmux;
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::sleep;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use impeccable_core::findings::Finding;
 use impeccable_detect::engines::{EngineError, ScanOptions, TmuxEngine};
@@ -20,10 +21,33 @@ use capture::{parse_frames, parse_rows, Frame, FrameRole};
 use palette::Palette;
 use tmux::{PaneInfo, Tmux};
 
-/// The gap between the first capture and the recapture.
-pub const RECAPTURE_DELAY_MS: u64 = 1000;
+/// When the recaptures are taken, in milliseconds after frame 0 (spec
+/// section 7, PR 4 item 2). A 100 ms animation aliases at 1000 ms and not
+/// at 700 ms.
+pub const RECAPTURE_DELAYS_MS: [u64; 2] = [700, 1000];
 /// `--tmux-settle` when the flag is absent.
 pub const DEFAULT_SETTLE_MS: u64 = 300;
+/// Settle waits sleep in steps this long and check for an interrupt between them.
+pub const INTERRUPT_POLL_MS: u64 = 50;
+
+/// Set by SIGINT or SIGTERM while a size pass runs; registered with
+/// `impeccable_common::proc::on_interrupt` only around that pass.
+static INTERRUPTED: AtomicBool = AtomicBool::new(false);
+
+/// Wait `total` in 50 ms steps; false as soon as `interrupted` is set.
+fn settle(total: Duration, interrupted: &AtomicBool) -> bool {
+    let start = Instant::now();
+    loop {
+        if interrupted.load(Ordering::SeqCst) {
+            return false;
+        }
+        let elapsed = start.elapsed();
+        if elapsed >= total {
+            return true;
+        }
+        sleep((total - elapsed).min(Duration::from_millis(INTERRUPT_POLL_MS)));
+    }
+}
 
 /// The tmux engine, holding the process environment it reads
 /// (`IMPECCABLE_TMUX`, `PATH`, `TMUX`, `COLORTERM`).
@@ -62,17 +86,72 @@ fn frame_from(text: &str, info: &PaneInfo, colorterm: &str, role: FrameRole) -> 
 }
 
 /// The `--tmux-sizes` pass: resize, settle, re-read the geometry, capture.
-/// The caller restores the window whatever this returns.
-fn capture_sizes(tmux: &Tmux, target: &str, options: &ScanOptions, colorterm: &str, frames: &mut Vec<Frame>) -> Result<(), String> {
-    let settle = Duration::from_millis(options.tmux_settle_ms.unwrap_or(DEFAULT_SETTLE_MS));
+/// Stops at the next check once `interrupted` is set. The caller restores
+/// the window whatever this returns.
+fn capture_sizes(
+    tmux: &Tmux,
+    target: &str,
+    options: &ScanOptions,
+    colorterm: &str,
+    frames: &mut Vec<Frame>,
+    interrupted: &AtomicBool,
+) -> Result<(), String> {
+    let settle_for = Duration::from_millis(options.tmux_settle_ms.unwrap_or(DEFAULT_SETTLE_MS));
     for &(w, h) in &options.tmux_sizes {
+        if interrupted.load(Ordering::SeqCst) {
+            return Err("interrupted".to_string());
+        }
         tmux.resize(target, w as usize, h as usize)?;
-        sleep(settle);
+        if !settle(settle_for, interrupted) {
+            return Err("interrupted".to_string());
+        }
         let info = tmux.pane_info(target)?;
         let text = tmux.capture(target)?;
         frames.push(frame_from(&text, &info, colorterm, FrameRole::Capture));
     }
     Ok(())
+}
+
+/// The size pass and the restore that always follows it. When `interrupted`
+/// is set by the end, the interrupt names the failure whatever the pass
+/// returned (on Windows, where the tmux child shares the terminal's process
+/// group, a Ctrl-C can also fail the tmux call in flight). The restore never
+/// checks the flag.
+#[allow(clippy::too_many_arguments)]
+fn size_pass(
+    tmux: &Tmux,
+    target: &str,
+    options: &ScanOptions,
+    info: &PaneInfo,
+    window_size: &str,
+    colorterm: &str,
+    frames: &mut Vec<Frame>,
+    interrupted: &AtomicBool,
+) -> Result<(), String> {
+    let captured = capture_sizes(tmux, target, options, colorterm, frames, interrupted);
+    let restored = tmux.restore(target, info.window_width, info.window_height, window_size);
+    if interrupted.load(Ordering::SeqCst) {
+        return Err(match restored {
+            Ok(()) => "interrupted; window restored".to_string(),
+            Err(r) => format!("interrupted; window not restored: {r}"),
+        });
+    }
+    match (captured, restored) {
+        (Err(c), Err(r)) => Err(format!("{c}; window not restored: {r}")),
+        (Ok(()), Err(r)) => Err(format!("window not restored: {r}")),
+        (Err(c), Ok(())) => Err(c),
+        (Ok(()), Ok(())) => Ok(()),
+    }
+}
+
+/// A signal that lands after `size_pass` last read the flag and before the
+/// handlers are cleared still reports as an interrupt. An Ok pass means the
+/// restore succeeded; an error already says what happened to the window.
+fn late_interrupt(result: Result<(), String>, interrupted: &AtomicBool) -> Result<(), String> {
+    match result {
+        Ok(()) if interrupted.load(Ordering::SeqCst) => Err("interrupted; window restored".to_string()),
+        other => other,
+    }
 }
 
 impl TmuxEngine for TerminalEngine {
@@ -82,18 +161,22 @@ impl TmuxEngine for TerminalEngine {
         let colorterm = self.colorterm();
         let first = tmux.capture(target).map_err(EngineError::new)?;
         let mut frames = vec![frame_from(&first, &info, &colorterm, FrameRole::Capture)];
-        sleep(Duration::from_millis(RECAPTURE_DELAY_MS));
-        let second = tmux.capture(target).map_err(EngineError::new)?;
-        frames.push(frame_from(&second, &info, &colorterm, FrameRole::Recapture));
+        // Both delays count from the end of frame 0's capture.
+        let taken = Instant::now();
+        for delay in RECAPTURE_DELAYS_MS {
+            sleep(Duration::from_millis(delay).saturating_sub(taken.elapsed()));
+            let again = tmux.capture(target).map_err(EngineError::new)?;
+            frames.push(frame_from(&again, &info, &colorterm, FrameRole::Recapture));
+        }
         if !options.tmux_sizes.is_empty() {
-            let captured = capture_sizes(&tmux, target, options, &colorterm, &mut frames);
-            let restored = tmux.restore(target, info.window_width, info.window_height);
-            match (captured, restored) {
-                (Err(c), Err(r)) => return Err(EngineError::new(format!("{c}; window not restored: {r}"))),
-                (Ok(()), Err(r)) => return Err(EngineError::new(format!("window not restored: {r}"))),
-                (Err(c), Ok(())) => return Err(EngineError::new(c)),
-                (Ok(()), Ok(())) => {}
-            }
+            let window_size = tmux.window_size(target).map_err(EngineError::new)?;
+            // From here to the end of the restore, SIGINT or SIGTERM sets a
+            // flag instead of killing the process (spec section 7, item 4).
+            INTERRUPTED.store(false, Ordering::SeqCst);
+            impeccable_common::proc::on_interrupt(&INTERRUPTED);
+            let result = size_pass(&tmux, target, options, &info, &window_size, &colorterm, &mut frames, &INTERRUPTED);
+            impeccable_common::proc::clear_interrupt();
+            late_interrupt(result, &INTERRUPTED).map_err(EngineError::new)?;
         }
         Ok(rules::scan_frames(&frames, palette_for(options), &format!("tmux:{target}")))
     }
@@ -203,6 +286,7 @@ echo "$1" >> "$DIR/calls.log"
 case "$1" in
   -V) echo "tmux 3.7c" ;;
   list-panes) exit 0 ;;
+  show-options) exit 0 ;;
   display-message) printf '40\t5\t40\t5\t\n' ;;
   capture-pane)
     {capture_pane}
@@ -213,6 +297,171 @@ case "$1" in
 esac
 "#
         )
+    }
+
+    /// A fake tmux that logs every call's full argument list to `calls.log`
+    /// and prints `window_size` for `show-options`, as tmux prints a window
+    /// option (nothing at all when the window has no value of its own).
+    #[cfg(unix)]
+    fn fake_tmux_logging_args(window_size: &str) -> String {
+        format!(
+            r#"#!/bin/sh
+DIR="$(dirname "$0")"
+echo "$*" >> "$DIR/calls.log"
+case "$1" in
+  -V) echo "tmux 3.7c" ;;
+  list-panes) exit 0 ;;
+  display-message) printf '40\t5\t40\t5\t\n' ;;
+  capture-pane) echo hi ;;
+  show-options) printf '{window_size}' ;;
+  resize-window|set-option) exit 0 ;;
+  *) exit 1 ;;
+esac
+"#
+        )
+    }
+
+    /// The calls that read or change the window, in order.
+    #[cfg(unix)]
+    fn window_calls(dir: &std::path::Path) -> Vec<String> {
+        std::fs::read_to_string(dir.join("calls.log"))
+            .unwrap()
+            .lines()
+            .filter(|l| ["show-options", "resize-window", "set-option"].iter().any(|v| l.starts_with(v)))
+            .map(String::from)
+            .collect()
+    }
+
+    /// A fake tmux located the way the engine locates it, for driving
+    /// `size_pass` directly with a flag the test controls.
+    #[cfg(unix)]
+    fn located(dir_name: &str, script: &str) -> (std::path::PathBuf, Tmux) {
+        let (dir, fake) = fake_tmux(dir_name, script);
+        let mut env = HashMap::new();
+        env.insert("IMPECCABLE_TMUX".to_string(), fake.to_string_lossy().into_owned());
+        (dir, Tmux::locate(&env).unwrap())
+    }
+
+    fn pane_40x5() -> PaneInfo {
+        PaneInfo { width: 40, height: 5, window_width: 40, window_height: 5, termfeatures: String::new() }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_interrupt_mid_settle_stops_the_pass_and_restores_the_window() {
+        let (dir, tmux) = located("impeccable-terminal-interrupt", &fake_tmux_logging_args(""));
+        let flag = AtomicBool::new(false);
+        let options = ScanOptions { tmux_sizes: vec![(30, 5), (20, 5)], tmux_settle_ms: Some(5_000), ..ScanOptions::default() };
+        let mut frames = Vec::new();
+        let start = Instant::now();
+        let result = std::thread::scope(|s| {
+            s.spawn(|| {
+                sleep(Duration::from_millis(200));
+                flag.store(true, Ordering::SeqCst);
+            });
+            size_pass(&tmux, "smoke:0.0", &options, &pane_40x5(), "", "", &mut frames, &flag)
+        });
+        assert_eq!(result.unwrap_err(), "interrupted; window restored");
+        assert!(start.elapsed() < Duration::from_secs(2), "the 5 s settle stopped within a poll step: {:?}", start.elapsed());
+        assert!(frames.is_empty(), "nothing was captured at the interrupted size");
+        assert_eq!(
+            window_calls(&dir),
+            vec![
+                "resize-window -t smoke:0.0 -x 30 -y 5",
+                "resize-window -t smoke:0.0 -x 40 -y 5",
+                "set-option -w -t smoke:0.0 -u window-size",
+            ],
+            "the second size never ran"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_interrupt_with_a_failed_restore_says_the_window_was_not_restored() {
+        let (dir, tmux) = located("impeccable-terminal-interrupt-restore-fails", &fake_tmux_for_restore_scenarios(false, true));
+        let flag = AtomicBool::new(true); // the signal landed before the first size
+        let options = ScanOptions { tmux_sizes: vec![(30, 5)], tmux_settle_ms: Some(0), ..ScanOptions::default() };
+        let err = size_pass(&tmux, "smoke:0.0", &options, &pane_40x5(), "", "", &mut Vec::new(), &flag).unwrap_err();
+        assert_eq!(err, "interrupted; window not restored: tmux set-option: boom");
+        let log = std::fs::read_to_string(dir.join("calls.log")).unwrap();
+        assert_eq!(log.lines().filter(|&c| c == "resize-window").count(), 1, "no size was applied; only the restore resized: {log}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_capture_that_times_out_still_restores_the_window() {
+        let script = r#"#!/bin/sh
+DIR="$(dirname "$0")"
+echo "$1" >> "$DIR/calls.log"
+case "$1" in
+  -V) echo "tmux 3.7c" ;;
+  list-panes) exit 0 ;;
+  display-message) printf '30\t5\t30\t5\t\n' ;;
+  capture-pane) exec sleep 30 ;;
+  resize-window|set-option) exit 0 ;;
+  *) exit 1 ;;
+esac
+"#;
+        let (dir, mut tmux) = located("impeccable-terminal-capture-timeout", script);
+        tmux.timeout = Duration::from_secs(1);
+        let options = ScanOptions { tmux_sizes: vec![(30, 5)], tmux_settle_ms: Some(0), ..ScanOptions::default() };
+        let err = size_pass(&tmux, "smoke:0.0", &options, &pane_40x5(), "", "", &mut Vec::new(), &AtomicBool::new(false)).unwrap_err();
+        assert_eq!(err, crate::tmux::timed_out("capture-pane", tmux.timeout));
+        let log = std::fs::read_to_string(dir.join("calls.log")).unwrap();
+        let calls: Vec<&str> = log.lines().collect();
+        assert_eq!(calls[calls.len() - 2..], ["resize-window", "set-option"], "the restore ran after the hung capture: {calls:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_signal_after_the_last_check_still_reports_the_interrupt() {
+        let flag = AtomicBool::new(true);
+        assert_eq!(late_interrupt(Ok(()), &flag).unwrap_err(), "interrupted; window restored");
+        assert_eq!(late_interrupt(Ok(()), &AtomicBool::new(false)), Ok(()));
+        // An error already names what went wrong with the window; it passes through.
+        assert_eq!(late_interrupt(Err("window not restored: boom".to_string()), &flag).unwrap_err(), "window not restored: boom");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn restore_puts_back_a_window_size_the_user_had_set() {
+        let (dir, fake) = fake_tmux("impeccable-terminal-restore-set", &fake_tmux_logging_args("largest\\n"));
+        let mut env = HashMap::new();
+        env.insert("IMPECCABLE_TMUX".to_string(), fake.to_string_lossy().into_owned());
+        let options = ScanOptions { tmux_sizes: vec![(30, 5)], tmux_settle_ms: Some(0), ..ScanOptions::default() };
+        TerminalEngine::new(env).detect_pane("smoke:0.0", &options).unwrap();
+        assert_eq!(
+            window_calls(&dir),
+            vec![
+                "show-options -w -v -t smoke:0.0 window-size",
+                "resize-window -t smoke:0.0 -x 30 -y 5",
+                "resize-window -t smoke:0.0 -x 40 -y 5",
+                "set-option -w -t smoke:0.0 window-size largest",
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn restore_unsets_window_size_when_the_window_had_none() {
+        let (dir, fake) = fake_tmux("impeccable-terminal-restore-unset", &fake_tmux_logging_args(""));
+        let mut env = HashMap::new();
+        env.insert("IMPECCABLE_TMUX".to_string(), fake.to_string_lossy().into_owned());
+        let options = ScanOptions { tmux_sizes: vec![(30, 5)], tmux_settle_ms: Some(0), ..ScanOptions::default() };
+        TerminalEngine::new(env).detect_pane("smoke:0.0", &options).unwrap();
+        assert_eq!(
+            window_calls(&dir),
+            vec![
+                "show-options -w -v -t smoke:0.0 window-size",
+                "resize-window -t smoke:0.0 -x 30 -y 5",
+                "resize-window -t smoke:0.0 -x 40 -y 5",
+                "set-option -w -t smoke:0.0 -u window-size",
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[cfg(unix)]
@@ -244,6 +493,22 @@ esac
         let options = ScanOptions { tmux_sizes: vec![(30, 5)], tmux_settle_ms: Some(0), ..ScanOptions::default() };
         let err = engine.detect_pane("smoke:0.0", &options).unwrap_err();
         assert_eq!(err.message, "window not restored: tmux set-option: boom");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_pane_scan_recaptures_twice_and_the_last_waits_a_full_second() {
+        let (dir, fake) = fake_tmux("impeccable-terminal-recaptures", &fake_tmux_for_restore_scenarios(false, false));
+        let mut env = HashMap::new();
+        env.insert("IMPECCABLE_TMUX".to_string(), fake.to_string_lossy().into_owned());
+        let start = std::time::Instant::now();
+        TerminalEngine::new(env).detect_pane("smoke:0.0", &ScanOptions::default()).unwrap();
+        let elapsed = start.elapsed();
+        let log = std::fs::read_to_string(dir.join("calls.log")).unwrap();
+        assert_eq!(log.lines().filter(|&c| c == "capture-pane").count(), 3, "frame 0 and two recaptures: {log}");
+        assert!(!log.lines().any(|c| c == "resize-window"), "no sizes, no resize");
+        assert!(elapsed >= std::time::Duration::from_millis(1000), "the last recapture waits 1000 ms: {elapsed:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

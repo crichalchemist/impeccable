@@ -1,0 +1,7 @@
+{
+  "stdout": "[\n  {\n    \"antipattern\": \"tui-rt-width-drift\",\n    \"name\": \"Row width drifts on emoji or CJK\",\n    \"description\": \"A row containing emoji or CJK measures wider than the pane or breaks the border column. Measure display width with a grapheme-aware library before padding or truncating.\",\n    \"severity\": \"advisory\",\n    \"category\": \"quality\",\n    \"file\": \"<REPO>/tests/fixtures/terminal-captures/width-drift-narrow.txt\",\n    \"line\": 2,\n    \"snippet\": \"row measures 41 cells on a 40-column pane\",\n    \"advisory\": true,\n    \"column\": 41,\n    \"frame\": \"40x4\"\n  }\n]\n",
+  "stderr": "",
+  "exit": 0,
+  "signal": null,
+  "files": {}
+}

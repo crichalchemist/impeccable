@@ -42,7 +42,7 @@ pub enum FrameRole {
     /// A capture at a size the run asked for.
     #[default]
     Capture,
-    /// The pane's own size again, one second after the first capture.
+    /// The pane's own size again, 700 ms or 1000 ms after the first capture.
     Recapture,
 }
 
@@ -86,6 +86,11 @@ impl Frame {
     /// Does the row hold a two-column glyph (emoji, CJK)?
     pub fn has_wide(&self, row: usize) -> bool {
         self.rows.get(row).map(|r| r.iter().any(|c| c.wide_tail)).unwrap_or(false)
+    }
+
+    /// How many two-cell clusters the row holds: one per wide tail.
+    pub fn wide_count(&self, row: usize) -> usize {
+        self.rows.get(row).map(|r| r.iter().filter(|c| c.wide_tail).count()).unwrap_or(0)
     }
 }
 
@@ -175,12 +180,15 @@ fn apply_header(frame: &mut Frame, header: &str) -> Result<(), String> {
 
 /// One captured row. SGR sequences update `style` (carried in from, and left
 /// for, the caller); every other character is a cell (zero-width characters
-/// take none, two-column glyphs take two). Non-CSI escapes (OSC hyperlinks,
-/// DCS/SOS/PM/APC strings, and anything else two-byte) are skipped rather
-/// than leaked as cells, and a CSI with a private parameter byte is ignored.
+/// take none, two-column glyphs take two), with tmux's rules for U+FE0F,
+/// emoji modifiers, and U+200D on top of `unicode-width`. Non-CSI escapes
+/// (OSC hyperlinks, DCS/SOS/PM/APC strings, and anything else two-byte) are
+/// skipped rather than leaked as cells, and a CSI with a private parameter
+/// byte is ignored.
 fn parse_row(line: &str, style: &mut Style) -> Vec<Cell> {
-    let mut cells = Vec::new();
+    let mut cells: Vec<Cell> = Vec::new();
     let mut chars = line.chars().peekable();
+    let mut after_zwj = false;
     while let Some(ch) = chars.next() {
         if ch == '\x1b' {
             match chars.peek() {
@@ -230,6 +238,28 @@ fn parse_row(line: &str, style: &mut Style) -> Vec<Cell> {
             continue;
         }
         if ch == '\r' {
+            continue;
+        }
+        // tmux 3.7c's cluster widths (spec section 7, PR 4 item 6): a
+        // character joined by U+200D is drawn inside the cluster before it,
+        // an emoji modifier recolors the glyph before it, and U+FE0F asks
+        // for emoji presentation, which tmux draws two cells wide.
+        if after_zwj {
+            after_zwj = false;
+            continue;
+        }
+        if ch == '\u{200D}' {
+            after_zwj = true;
+            continue;
+        }
+        if ('\u{1F3FB}'..='\u{1F3FF}').contains(&ch) {
+            continue;
+        }
+        if ch == '\u{FE0F}' {
+            // Only a one-cell glyph widens: a wide glyph's last cell is its tail.
+            if let Some(base) = cells.last().filter(|c| c.glyph.is_some()).map(|c| c.style) {
+                cells.push(Cell { glyph: None, wide_tail: true, style: base });
+            }
             continue;
         }
         match ch.width().unwrap_or(0) {
@@ -364,12 +394,12 @@ mod tests {
     #[test]
     fn wide_glyphs_take_two_cells_and_zero_width_marks_take_none() {
         let cells = parse_row("a😀b日本⚠\u{FE0F}");
-        assert_eq!(cells.len(), 9);
+        assert_eq!(cells.len(), 10, "⚠ with U+FE0F is two cells since PR 4");
         assert!(cells[2].wide_tail && cells[2].glyph.is_none());
         let frame = Frame { rows: vec![cells], ..Frame::default() };
         assert_eq!(frame.text(0), "a😀b日本⚠");
         assert!(frame.has_wide(0));
-        assert_eq!(frame.row_width(0), 9);
+        assert_eq!(frame.row_width(0), 10);
     }
 
     #[test]
@@ -454,5 +484,25 @@ mod tests {
         assert_eq!(cells[0].style.fg, Color::Indexed(15));
         assert_eq!(cells[0].style.bg, Color::Indexed(4));
         assert!(!cells[0].style.dim, "the underline-color RGB channels must not be read as SGR 2 (dim)");
+    }
+
+    #[test]
+    fn emoji_sequences_measure_two_cells_like_tmux() {
+        // The six sequences probed on tmux 3.7c with #{cursor_x} (spec section 7).
+        for s in ["❤\u{FE0F}", "✔\u{FE0F}", "☀\u{FE0F}", "⚠\u{FE0F}", "👍\u{1F3FD}", "🧑\u{200D}💻"] {
+            let cells = parse_row(s);
+            assert_eq!(cells.len(), 2, "{s:?} measures two cells");
+            assert!(cells[0].glyph.is_some() && cells[1].wide_tail, "{s:?} is one glyph and its wide tail");
+        }
+        assert_eq!(parse_row("❤").len(), 1, "without U+FE0F the heart stays one cell, as tmux draws it");
+        assert_eq!(parse_row("日\u{FE0F}").len(), 2, "U+FE0F never widens a glyph that is already two cells");
+        assert_eq!(parse_row("a\u{200D}b c").len(), 3, "the character after U+200D takes no cell");
+    }
+
+    #[test]
+    fn a_row_counts_one_wide_glyph_per_two_cell_cluster() {
+        let frame = Frame { rows: vec![parse_row("❤\u{FE0F} 🚀 日 ok")], ..Frame::default() };
+        assert_eq!(frame.wide_count(0), 3);
+        assert_eq!(frame.wide_count(1), 0, "a missing row holds none");
     }
 }

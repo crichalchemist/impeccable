@@ -3,12 +3,36 @@
 //! degradation" and "Multi-size pass").
 
 use std::collections::HashMap;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 pub const NOT_FOUND_MESSAGE: &str = "tmux 3.2 or newer is required for --tmux and was not found on PATH. Install tmux, or point IMPECCABLE_TMUX at the executable.";
 /// `resize-window -x -y` and `client_termfeatures` both arrived in 3.2.
 pub const MIN_VERSION: (u32, u32) = (3, 2);
+
+/// Every tmux call's deadline (spec section 7, PR 4 item 3).
+pub const TIMEOUT: Duration = Duration::from_secs(5);
+/// How often a running tmux call is polled for exit.
+const POLL: Duration = Duration::from_millis(5);
+
+/// What an expired call reports: `tmux <verb>: timed out after 5 seconds`.
+pub fn timed_out(verb: &str, timeout: Duration) -> String {
+    format!("tmux {verb}: timed out after {} seconds", timeout.as_secs())
+}
+
+/// Drain a child's pipe on its own thread so a full pipe never stalls it.
+fn read_all<R: Read + Send + 'static>(pipe: Option<R>) -> JoinHandle<Vec<u8>> {
+    thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(mut p) = pipe {
+            let _ = p.read_to_end(&mut buf);
+        }
+        buf
+    })
+}
 
 /// `IMPECCABLE_TMUX` (a path, reported when it does not exist), else the first
 /// `tmux` on `PATH`.
@@ -63,12 +87,14 @@ pub struct PaneInfo {
 pub struct Tmux {
     exe: PathBuf,
     env: HashMap<String, String>,
+    /// Each call's deadline: [`TIMEOUT`], lowered only by tests.
+    pub(crate) timeout: Duration,
 }
 
 impl Tmux {
     pub fn locate(env: &HashMap<String, String>) -> Result<Tmux, String> {
         let exe = find_tmux(env)?;
-        let tmux = Tmux { exe, env: env.clone() };
+        let tmux = Tmux { exe, env: env.clone(), timeout: TIMEOUT };
         let version = tmux.run(&["-V"])?;
         match parse_version(&version) {
             Some(v) if v >= MIN_VERSION => Ok(tmux),
@@ -76,24 +102,49 @@ impl Tmux {
         }
     }
 
-    /// Run tmux with `args`: stdout on success, `tmux <verb>: <first stderr line>` otherwise.
+    /// Run tmux with `args` under the deadline: stdout on success,
+    /// `tmux <verb>: <first stderr line>` on failure, and
+    /// `tmux <verb>: timed out after 5 seconds` once the deadline passes (the
+    /// child is killed). On unix the child gets its own process group, so a
+    /// Ctrl-C at the terminal reaches the engine and not the call in flight.
     pub fn run(&self, args: &[&str]) -> Result<String, String> {
-        let output = Command::new(&self.exe)
-            .args(args)
+        let verb = args.first().copied().unwrap_or("");
+        let mut cmd = Command::new(&self.exe);
+        cmd.args(args)
             .env_clear()
             .envs(&self.env)
             .stdin(Stdio::null())
-            .output()
-            .map_err(|e| format!("could not run {}: {e}", self.exe.display()))?;
-        if output.status.success() {
-            return Ok(String::from_utf8_lossy(&output.stdout).into_owned());
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            cmd.process_group(0);
         }
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(format!(
-            "tmux {}: {}",
-            args.first().copied().unwrap_or(""),
-            stderr.lines().next().unwrap_or("").trim()
-        ))
+        let mut child = cmd.spawn().map_err(|e| format!("could not run {}: {e}", self.exe.display()))?;
+        let stdout = read_all(child.stdout.take());
+        let stderr = read_all(child.stderr.take());
+        let start = Instant::now();
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) if start.elapsed() >= self.timeout => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    // The readers are not joined: a grandchild may still hold a pipe.
+                    return Err(timed_out(verb, self.timeout));
+                }
+                Ok(None) => thread::sleep(POLL),
+                Err(e) => return Err(format!("could not run {}: {e}", self.exe.display())),
+            }
+        };
+        let out = stdout.join().unwrap_or_default();
+        let err = stderr.join().unwrap_or_default();
+        if status.success() {
+            return Ok(String::from_utf8_lossy(&out).into_owned());
+        }
+        let err = String::from_utf8_lossy(&err);
+        Err(format!("tmux {verb}: {}", err.lines().next().unwrap_or("").trim()))
     }
 
     /// tmux 3.7's `display-message -p -t <target>` does not fail on a
@@ -133,11 +184,23 @@ impl Tmux {
         self.run(&["resize-window", "-t", target, "-x", &width.to_string(), "-y", &height.to_string()]).map(|_| ())
     }
 
-    /// Back to the recorded size, then drop the `manual` window-size that
-    /// `resize-window` set so the window follows its clients again.
-    pub fn restore(&self, target: &str, width: usize, height: usize) -> Result<(), String> {
+    /// The window's own `window-size` option, trimmed: empty when the window
+    /// has none and follows the global value. Read before the first resize,
+    /// because `resize-window` replaces any value with `manual`.
+    pub fn window_size(&self, target: &str) -> Result<String, String> {
+        Ok(self.run(&["show-options", "-w", "-v", "-t", target, "window-size"])?.trim().to_string())
+    }
+
+    /// Back to the recorded size, then put back the `window-size` read before
+    /// the first resize, or unset the `manual` value `resize-window` left
+    /// when there was none, so the window follows its clients again.
+    pub fn restore(&self, target: &str, width: usize, height: usize, window_size: &str) -> Result<(), String> {
         self.resize(target, width, height)?;
-        self.run(&["set-option", "-w", "-t", target, "-u", "window-size"]).map(|_| ())
+        if window_size.is_empty() {
+            self.run(&["set-option", "-w", "-t", target, "-u", "window-size"]).map(|_| ())
+        } else {
+            self.run(&["set-option", "-w", "-t", target, "window-size", window_size]).map(|_| ())
+        }
     }
 }
 
@@ -188,6 +251,33 @@ mod tests {
         env.insert("IMPECCABLE_TMUX".to_string(), fake.to_string_lossy().into_owned());
         env.insert("PATH".to_string(), "/usr/bin:/bin".to_string());
         assert_eq!(Tmux::locate(&env).unwrap_err(), "tmux 3.2 or newer is required for --tmux; found tmux 3.1b");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_expired_call_names_the_verb_and_the_five_second_deadline() {
+        assert_eq!(TIMEOUT, Duration::from_secs(5));
+        assert_eq!(timed_out("capture-pane", TIMEOUT), "tmux capture-pane: timed out after 5 seconds");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_hung_tmux_call_is_killed_at_the_deadline() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("impeccable-tmux-hang-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fake = dir.join("tmux");
+        std::fs::write(&fake, "#!/bin/sh\ncase \"$1\" in\n  -V) echo tmux 3.7c ;;\n  *) exec sleep 30 ;;\nesac\n").unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut env = HashMap::new();
+        env.insert("IMPECCABLE_TMUX".to_string(), fake.to_string_lossy().into_owned());
+        env.insert("PATH".to_string(), "/usr/bin:/bin".to_string());
+        let mut tmux = Tmux::locate(&env).unwrap();
+        assert_eq!(tmux.timeout, TIMEOUT, "locate sets the spec's deadline");
+        tmux.timeout = Duration::from_secs(1);
+        let start = Instant::now();
+        assert_eq!(tmux.run(&["capture-pane", "-p"]).unwrap_err(), timed_out("capture-pane", tmux.timeout));
+        assert!(start.elapsed() < Duration::from_secs(3), "killed at the deadline, not after sleep 30: {:?}", start.elapsed());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

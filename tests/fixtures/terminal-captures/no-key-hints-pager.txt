@@ -1,0 +1,7 @@
+#!capture width=80 height=6
+LESS(1)                    General Commands Manual
+
+NAME
+       less - opposite of more
+
+:                                                                               

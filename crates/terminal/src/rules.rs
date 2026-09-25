@@ -6,7 +6,7 @@ use impeccable_core::color::contrast_ratio;
 use impeccable_core::findings::{derive_advisory_flag, finding, Finding};
 use serde_json::Value;
 
-use crate::capture::{Color, Frame, FrameRole};
+use crate::capture::{Color, Frame, FrameRole, Style};
 use crate::palette::{hex, Palette};
 
 macro_rules! re {
@@ -36,18 +36,24 @@ re!(
     KEY_HINT_RE,
     r"(?i)(?:^|[\s:|/,(\[<])(?:q|esc|enter|tab|space|ctrl|alt|shift|f\d{1,2}|[hjkl])(?:$|[\s:|/,)\]>])|[?↑↓←→⏎⌃⌘]|<[^>\s]{1,12}>|\[[^\]\s]{1,12}\]|\^[A-Z]"
 );
+re!(PAGER_PROMPT_RE, r"\(END\)|--More--|\blines \d+-\d+");
 
 /// Every runtime rule over the frames of one target, in the frame policy
 /// spec section 5 fixes: size-invariant rules on the first frame, the spinner
-/// against the recapture, geometry on every capture frame.
+/// against each recapture, geometry on every capture frame.
 pub fn scan_frames(frames: &[Frame], palette: Palette, file: &str) -> Vec<Finding> {
     let mut out = Vec::new();
     let Some(first) = frames.first() else { return out };
     out.extend(rt_low_contrast(first, palette, file));
     out.extend(rt_truecolor_on_256(first, file));
     out.extend(rt_no_key_hints(first, file));
-    if let Some(second) = frames.iter().find(|f| f.role == FrameRole::Recapture) {
-        out.extend(rt_spinner_never_rests(first, second, file));
+    // Frame 0 against each recapture, in order; one finding at most.
+    for recapture in frames.iter().filter(|f| f.role == FrameRole::Recapture) {
+        let found = rt_spinner_never_rests(first, recapture, file);
+        if !found.is_empty() {
+            out.extend(found);
+            break;
+        }
     }
     for frame in frames.iter().filter(|f| f.role == FrameRole::Capture) {
         out.extend(rt_nested_borders(frame, file));
@@ -77,6 +83,14 @@ fn is_text(ch: char) -> bool {
 
 fn is_spinner(ch: char) -> bool {
     SPINNER_GLYPHS.contains(ch) || ('\u{2800}'..='\u{28FF}').contains(&ch)
+}
+
+/// The terminal's default colors and the 16 named ones come from the user's
+/// theme, so a ratio measured over them holds only for the `--palette` the
+/// scan assumed (spec section 7, PR 4 item 8).
+fn palette_relative(style: &Style) -> bool {
+    let themed = |c: Color| matches!(c, Color::Default) || matches!(c, Color::Indexed(n) if n < 16);
+    themed(style.fg) || themed(style.bg)
 }
 
 pub fn rt_low_contrast(frame: &Frame, palette: Palette, file: &str) -> Vec<Finding> {
@@ -118,6 +132,7 @@ pub fn rt_low_contrast(frame: &Frame, palette: Palette, file: &str) -> Vec<Findi
             let snippet = format!("\"{run}\" {} on {}: {shown:.1}:1 (need 4.5:1)", key.0, key.1);
             let mut f = rt_finding("tui-rt-low-contrast", file, frame, r, c, snippet);
             f.extras.insert("cellCount".into(), Value::from(count));
+            f.extras.insert("paletteRelative".into(), Value::from(palette_relative(&cell.style)));
             out.push(f);
         }
     }
@@ -147,14 +162,25 @@ pub fn rt_truecolor_on_256(frame: &Frame, file: &str) -> Vec<Finding> {
     Vec::new()
 }
 
+/// A pager's own prompt on the bottom row: exactly `:` once the trailing
+/// spaces `capture-pane -J` keeps are trimmed, or a row containing `(END)`,
+/// `--More--`, or `lines <n>-<m>`.
+fn is_pager_prompt(text: &str) -> bool {
+    text.trim_end() == ":" || PAGER_PROMPT_RE.is_match(text)
+}
+
 pub fn rt_no_key_hints(frame: &Frame, file: &str) -> Vec<Finding> {
     let non_blank: Vec<usize> = (0..frame.rows.len()).filter(|&r| !frame.is_blank(r)).collect();
     if non_blank.len() < MIN_ROWS_FOR_HINTS {
         return Vec::new();
     }
+    // A key named on the first row (a help line, a table header) counts too.
+    if KEY_HINT_RE.is_match(&frame.text(non_blank[0])) {
+        return Vec::new();
+    }
     let r = *non_blank.last().expect("checked above");
     let text = frame.text(r);
-    if KEY_HINT_RE.is_match(&text) {
+    if KEY_HINT_RE.is_match(&text) || is_pager_prompt(&text) {
         return Vec::new();
     }
     let shown: String = text.trim().chars().take(60).collect();
@@ -166,7 +192,7 @@ pub fn rt_spinner_never_rests(first: &Frame, second: &Frame, file: &str) -> Vec<
         for (c, cell) in row.iter().enumerate() {
             let (Some(a), Some(b)) = (cell.glyph, second.glyph(r, c)) else { continue };
             if a != b && is_spinner(a) && is_spinner(b) {
-                let snippet = format!("spinner glyph {a} became {b} after one second with no input");
+                let snippet = format!("spinner glyph {a} became {b} between captures with no input");
                 return vec![rt_finding("tui-rt-spinner-never-rests", file, first, r, c, snippet)];
             }
         }
@@ -274,18 +300,58 @@ fn mode_of(values: &[usize]) -> Option<usize> {
     best.filter(|&(_, count)| count >= 2).map(|(v, _)| v)
 }
 
+/// What a row wider than its frame is (spec section 7, PR 4 item 1). Each
+/// row gets exactly one verdict, shared by width drift and narrow collapse;
+/// `line` and `column` index the joined frame `capture-pane -J` returns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Overflow {
+    /// No wider than the frame.
+    Fits,
+    /// The overflow is no larger than the row's count of wide glyphs: the
+    /// app measured some of them as one cell. Any frame width.
+    WidthDrift,
+    /// Otherwise, in a frame under 60 columns, a row holding a Box Drawing
+    /// glyph: the layout itself overflowed.
+    Collapse,
+    /// Anything else, such as prose the terminal wrapped and `-J` joined.
+    Wrapped,
+}
+
+fn is_box_drawing(ch: char) -> bool {
+    ('\u{2500}'..='\u{257F}').contains(&ch)
+}
+
+pub fn overflow_verdict(frame: &Frame, r: usize) -> Overflow {
+    let w = frame.row_width(r);
+    if frame.width == 0 || w <= frame.width {
+        return Overflow::Fits;
+    }
+    if w - frame.width <= frame.wide_count(r) {
+        return Overflow::WidthDrift;
+    }
+    let boxed = frame.rows[r].iter().any(|c| c.glyph.map(is_box_drawing).unwrap_or(false));
+    if frame.width < NARROW_COLUMNS && boxed {
+        Overflow::Collapse
+    } else {
+        Overflow::Wrapped
+    }
+}
+
 pub fn rt_width_drift(frame: &Frame, file: &str) -> Vec<Finding> {
     let mut out = Vec::new();
     let ends: Vec<usize> = (0..frame.rows.len()).filter_map(|r| last_vertical(frame, r)).collect();
     let usual_end = mode_of(&ends);
     for r in 0..frame.rows.len() {
-        if !frame.has_wide(r) {
-            continue;
+        match overflow_verdict(frame, r) {
+            Overflow::WidthDrift => {
+                let snippet = format!("row measures {} cells on a {}-column pane", frame.row_width(r), frame.width);
+                out.push(rt_finding("tui-rt-width-drift", file, frame, r, frame.width, snippet));
+                continue;
+            }
+            Overflow::Fits => {}
+            Overflow::Collapse | Overflow::Wrapped => continue,
         }
-        let w = frame.row_width(r);
-        if frame.width > 0 && w > frame.width {
-            let snippet = format!("row measures {w} cells on a {}-column pane", frame.width);
-            out.push(rt_finding("tui-rt-width-drift", file, frame, r, frame.width, snippet));
+        if !frame.has_wide(r) {
             continue;
         }
         if let (Some(end), Some(usual)) = (last_vertical(frame, r), usual_end) {
@@ -306,10 +372,14 @@ pub fn rt_collapse_narrow(frame: &Frame, file: &str) -> Vec<Finding> {
             continue;
         }
         let w = row.len();
-        if frame.width > 0 && w > frame.width {
-            let snippet = format!("row overflows the {}-column pane by {} cells", frame.width, w - frame.width);
-            out.push(rt_finding("tui-rt-collapse-narrow", file, frame, r, frame.width, snippet));
-            continue;
+        match overflow_verdict(frame, r) {
+            Overflow::Collapse => {
+                let snippet = format!("row overflows the {}-column pane by {} cells", frame.width, w - frame.width);
+                out.push(rt_finding("tui-rt-collapse-narrow", file, frame, r, frame.width, snippet));
+                continue;
+            }
+            Overflow::Fits => {}
+            Overflow::WidthDrift | Overflow::Wrapped => continue,
         }
         let text = frame.text(r);
         let has_left = text.chars().any(|g| TOP_LEFT.contains(g) || BOTTOM_LEFT.contains(g));
@@ -445,10 +515,26 @@ pub(crate) mod tests {
         let out = rt_spinner_never_rests(&a, &b, "x");
         assert_eq!(out.len(), 1, "one finding per pair, at the first cycling cell");
         assert_eq!((out[0].line, out[0].extras["column"].clone()), (1.0, Value::from(9)));
-        assert_eq!(out[0].snippet, "spinner glyph ⠋ became ⠙ after one second with no input");
+        assert_eq!(out[0].snippet, "spinner glyph ⠋ became ⠙ between captures with no input");
         assert!(rt_spinner_never_rests(&a, &a, "x").is_empty(), "a resting glyph is fine");
         let c = frame(40, &["working ✓  ✓", "│ x │", HINTS]);
         assert!(rt_spinner_never_rests(&a, &c, "x").is_empty(), "a spinner that resolved is fine");
+    }
+
+    #[test]
+    fn the_spinner_is_compared_with_each_recapture_and_reported_once() {
+        let first = frame(40, &["working ⠋", "│ x │", HINTS]);
+        let mut same = frame(40, &["working ⠋", "│ x │", HINTS]);
+        same.role = FrameRole::Recapture;
+        let mut moved = frame(40, &["working ⠙", "│ x │", HINTS]);
+        moved.role = FrameRole::Recapture;
+        let spinner = |frames: &[Frame]| {
+            scan_frames(frames, Palette::Dark, "x").into_iter().filter(|f| f.antipattern == "tui-rt-spinner-never-rests").count()
+        };
+        assert_eq!(spinner(&[first.clone(), same.clone(), moved.clone()]), 1, "the differing recapture need not be the first");
+        assert_eq!(spinner(&[first.clone(), moved.clone(), moved.clone()]), 1, "two differing recaptures still make one finding");
+        assert_eq!(spinner(&[first.clone(), same.clone()]), 0, "a PR 3 file with one matching recapture");
+        assert_eq!(spinner(&[first, moved]), 1, "a PR 3 file with one differing recapture still replays");
     }
 
     #[test]
@@ -540,5 +626,94 @@ pub(crate) mod tests {
         assert!(out.iter().all(|f| f.advisory == Some(true) && f.file == "tmux:app:0.0"));
         let wide = frame(80, &["┌──────────────────────────────────────────────────────────────────────────────────────┐", "text", HINTS]);
         assert!(!ids(&scan_frames(&[wide], Palette::Dark, "x")).contains(&"tui-rt-collapse-narrow"), "80 columns is not narrow");
+    }
+
+    const PROSE: &str = "The quick brown fox jumps over the lazy dog while the index rebuilds in the background.";
+
+    #[test]
+    fn joined_prose_row_under_sixty_columns_reports_nothing() {
+        let f = frame(40, &[&format!("┌{}┐", "─".repeat(38)), &format!("└{}┘", "─".repeat(38)), PROSE, HINTS]);
+        assert_eq!(overflow_verdict(&f, 2), Overflow::Wrapped);
+        assert!(rt_collapse_narrow(&f, "x").is_empty(), "a row -J joined is the terminal's wrap");
+        assert!(rt_width_drift(&f, "x").is_empty());
+    }
+
+    #[test]
+    fn emoji_overflow_under_sixty_columns_is_width_drift_only() {
+        let top = format!("┌{}┐", "─".repeat(38));
+        let rocket = format!("│ 🚀 launch{}│", " ".repeat(29)); // 1 + 1 + 2 + 7 + 29 + 1 = 41 cells
+        let bottom = format!("└{}┘", "─".repeat(38));
+        let f = frame(40, &[&top, &rocket, &bottom, HINTS]);
+        assert_eq!(f.row_width(1), 41);
+        assert_eq!(overflow_verdict(&f, 1), Overflow::WidthDrift);
+        let out = scan_frames(&[f], Palette::Dark, "x");
+        assert_eq!(ids(&out), vec!["tui-rt-width-drift"], "one verdict per row: no collapse beside the drift");
+        assert_eq!(out[0].snippet, "row measures 41 cells on a 40-column pane");
+    }
+
+    #[test]
+    fn heart_with_emoji_presentation_counts_as_one_wide_glyph() {
+        let one_over = frame(40, &[&format!("│ ❤\u{FE0F} ok{}│", " ".repeat(33))]); // 1 + 1 + 2 + 3 + 33 + 1 = 41
+        assert_eq!((one_over.row_width(0), one_over.wide_count(0)), (41, 1));
+        assert_eq!(overflow_verdict(&one_over, 0), Overflow::WidthDrift);
+        let two_over = frame(40, &[&format!("│ ❤\u{FE0F} ok{}│", " ".repeat(34))]);
+        assert_eq!(overflow_verdict(&two_over, 0), Overflow::Collapse, "42 cells with one wide glyph is more than drift");
+    }
+
+    #[test]
+    fn boxed_overflow_under_sixty_columns_is_collapse_only() {
+        let f = frame(40, &[&format!("┌{}┐", "─".repeat(48)), HINTS]);
+        assert_eq!(overflow_verdict(&f, 0), Overflow::Collapse);
+        assert_eq!(ids(&rt_collapse_narrow(&f, "x")), vec!["tui-rt-collapse-narrow"]);
+        assert!(rt_width_drift(&f, "x").is_empty());
+    }
+
+    #[test]
+    fn overflow_past_the_wide_glyph_count_at_sixty_columns_or_more_reports_nothing() {
+        // A joined row in a wide frame: one emoji plus prose the terminal wrapped.
+        let f = frame(80, &[&format!("│ 🚀 {}", "word ".repeat(20)), HINTS]); // 105 cells on 80
+        assert_eq!(overflow_verdict(&f, 0), Overflow::Wrapped);
+        assert!(rt_width_drift(&f, "x").is_empty());
+        assert_eq!(overflow_verdict(&f, 1), Overflow::Fits);
+    }
+
+    #[test]
+    fn a_key_on_the_first_row_or_a_pager_prompt_at_the_bottom_silences_key_hints() {
+        let help_on_top = frame(80, &["q quit  / search  ? help", "NAME        SIZE", "a.txt       12K", "b.txt       40K"]);
+        assert!(rt_no_key_hints(&help_on_top, "x").is_empty(), "a screen whose first row names the keys");
+        for prompt in [":", ":                    ", "(END)", "--More--(42%)", "lines 1-24/200 12%", "README.md lines 25-48"] {
+            let pager = frame(80, &["NAME", "     less - opposite of more", "DESCRIPTION", prompt]);
+            assert!(rt_no_key_hints(&pager, "x").is_empty(), "pager prompt {prompt:?}");
+        }
+        // Rows captured from macOS top on a scratch server while planning.
+        let top = frame(100, &[
+            "Processes: 714 total, 2 running, 712 sleeping, 4442 threads                                14:22:30",
+            "Load Avg: 4.94, 5.73, 7.70  CPU usage: 13.12% user, 22.89% sys, 63.98% idle",
+            "87568  installd     0.0  00:00.21 2     1    59    1216K 0B    0B    87568 1     sleeping",
+        ]);
+        assert_eq!(rt_no_key_hints(&top, "x").len(), 1, "top names no key on its first row, so it still fires");
+        let colon_inside = frame(80, &["NAME", "     less - opposite of more", "DESCRIPTION", "Status: idle"]);
+        assert_eq!(rt_no_key_hints(&colon_inside, "x").len(), 1, "a colon inside text is not a prompt");
+        let guidelines = frame(80, &["NAME", "     less - opposite of more", "DESCRIPTION", "Guidelines 1-5 apply"]);
+        assert_eq!(rt_no_key_hints(&guidelines, "x").len(), 1, "\"lines\" inside another word is not a pager prompt");
+        let readme_lines = frame(80, &["NAME", "     less - opposite of more", "DESCRIPTION", "README.md lines 25-48"]);
+        assert!(rt_no_key_hints(&readme_lines, "x").is_empty(), "a real lines prompt still silences");
+    }
+
+    #[test]
+    fn a_ratio_over_theme_colors_is_marked_palette_relative() {
+        let f = frame(40, &[
+            "\x1b[38;2;120;120;120;48;2;100;100;100mfaint\x1b[0m",
+            "\x1b[30mblack on default\x1b[0m",
+            "\x1b[38;5;236;48;5;235mdim cube\x1b[0m",
+            HINTS,
+        ]);
+        let out = rt_low_contrast(&f, Palette::Dark, "x");
+        assert_eq!(out.len(), 3, "{:?}", out.iter().map(|x| &x.snippet).collect::<Vec<_>>());
+        assert_eq!(out[0].extras["paletteRelative"], Value::from(false), "truecolor on truecolor is the same on every theme");
+        assert_eq!(out[1].extras["paletteRelative"], Value::from(true), "named black on the default background comes from the theme");
+        assert_eq!(out[2].extras["paletteRelative"], Value::from(false), "the 256-color cube and grays are fixed");
+        let keys: Vec<&String> = out[0].extras.keys().collect();
+        assert_eq!(keys, vec!["column", "frame", "cellCount", "paletteRelative"], "the new extra comes last");
     }
 }
