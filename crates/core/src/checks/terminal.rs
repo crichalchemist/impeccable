@@ -533,6 +533,16 @@ re!(SIZE_24_RE, r"(?i)\b(?:height|rows|lines)[ \t]*[:=][ \t]*24\b");
 re!(SIZE_CALL_RE, r"\.Width\(80\)|width=\{80\}|size=\(80,[ \t]*24\)");
 re!(CONSTRAINT_LENGTH_RE, r"Constraint::Length\(");
 re!(CONSTRAINT_FLEX_RE, r"Constraint::(?:Min|Max|Percentage|Ratio|Fill)\(");
+// Spec section 7, PR 5 (a): a file that measures the terminal holds its 80
+// or 24 as the fallback for when the measurement fails.
+re!(
+    MEASURES_TERMINAL_RE,
+    r"GetSize\(|terminal::size\(|terminal_size\(|get_terminal_size\(|stdout\.columns|stdout\.rows|console\.(?:width|size)\b"
+);
+// (c): in a file that uses ratatui's canvas, a literal Rect is a drawing
+// coordinate, not the terminal.
+re!(CANVAS_RE, r"widgets::canvas\b");
+re!(SIZE_LITERAL_RE, r"\b(?:80|24)\b");
 
 /// Test code pins sizes on purpose (spec: "outside paths containing test").
 /// Only the file name and its parent directory are consulted, so a fixture
@@ -555,11 +565,19 @@ fn scan_terminal_hardcoded_size(lines: &[&str], file_path: &str) -> Vec<Finding>
     if in_test_path(file_path) {
         return Vec::new();
     }
+    let text = lines.join("\n");
+    let measures = MEASURES_TERMINAL_RE.is_match(&text);
+    let canvas = CANVAS_RE.is_match(&text);
     let mut out: Vec<Finding> = lines
         .iter()
         .enumerate()
         .filter(|(_, l)| {
-            RECT_LITERAL_RE.is_match(l) || SIZE_80_RE.is_match(l) || SIZE_24_RE.is_match(l) || SIZE_CALL_RE.is_match(l)
+            let rect = RECT_LITERAL_RE
+                .find(l)
+                .is_some_and(|m| !canvas && !(measures && SIZE_LITERAL_RE.is_match(m.as_str())));
+            let literal =
+                !measures && (SIZE_80_RE.is_match(l) || SIZE_24_RE.is_match(l) || SIZE_CALL_RE.is_match(l));
+            rect || literal
         })
         .map(|(i, _)| hit("tui-hardcoded-size", file_path, lines, i))
         .collect();
@@ -1007,6 +1025,37 @@ mod tests {
         assert_eq!(ids(&f), vec!["tui-hardcoded-size"]);
         assert_eq!(f[0].line, 1.0);
         assert_eq!(f[0].extras.get("lengthConstraints"), Some(&Value::from(2u64)));
+    }
+
+    #[test]
+    fn a_fallback_size_in_a_file_that_measures_the_terminal_is_not_flagged() {
+        // glow's idiom: the literal is what the program uses when GetSize fails.
+        let go = "w, _, err := term.GetSize(int(os.Stdout.Fd()))\nif err != nil {\n\twidth = 80\n}\nmsg := tea.WindowSizeMsg{Width: 80, Height: 24}\n";
+        assert!(scan_terminal_source(go, "main.go", Stack::Charm, Some(&ALL)).is_empty());
+        let rs = "let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));\nlet fallback = Rect::new(0, 0, 80, 24);\nlet width = 80;\n";
+        assert!(scan(rs, Stack::Ratatui, Some(&ALL)).is_empty());
+        let py = "cols = shutil.get_terminal_size().columns\nsize=(80, 24)\n";
+        assert!(scan(py, Stack::Textual, Some(&ALL)).is_empty());
+        let rich = "if console.width < 100:\n    columns = 80\n";
+        assert!(scan(rich, Stack::Textual, Some(&ALL)).is_empty());
+        let ink = "const cols = process.stdout.columns ?? 80;\nexport const A = () => <Box width={80} />;\n";
+        assert!(scan(ink, Stack::Ink, Some(&ALL)).is_empty());
+        // A rectangle that is not an 80x24 fallback still fires in a measuring file.
+        let other = "let (c, r) = crossterm::terminal::size()?;\nlet r = Rect::new(10, 10, 200, 100);\n";
+        assert_eq!(ids(&scan(other, Stack::Ratatui, Some(&ALL))), vec!["tui-hardcoded-size"]);
+        // A measurement that is commented out exempts nothing: the scan sees blanked text.
+        let blanked = strip_c_comments("// let (w, h) = crossterm::terminal::size()?;\nlet width = 80;\n");
+        assert_eq!(ids(&scan(&blanked, Stack::Ratatui, Some(&ALL))), vec!["tui-hardcoded-size"]);
+        // The canonical case neither measures nor draws on a canvas.
+        assert_eq!(ids(&scan("fn area() -> Rect { Rect::new(0, 0, 80, 24) }\n", Stack::Ratatui, Some(&ALL))), vec!["tui-hardcoded-size"]);
+    }
+
+    #[test]
+    fn a_literal_rect_in_a_canvas_file_is_a_drawing_coordinate() {
+        let src = "use ratatui::widgets::canvas::{Canvas, Rectangle};\nlet r = Rect::new(10, 10, 200, 100);\nlet width = 80;\n";
+        let f = scan(src, Stack::Ratatui, Some(&ALL));
+        assert_eq!(ids(&f), vec!["tui-hardcoded-size"], "the canvas exemption covers Rect::new only");
+        assert_eq!(f[0].line, 3.0);
     }
 
     #[test]
