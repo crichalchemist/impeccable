@@ -490,6 +490,13 @@ Recorded from the PR 3 final review and the manual pass (`docs/superpowers/resea
 - `client_termfeatures` is empty on a detached server, so `tui-rt-truecolor-on-256` is silent unless a client is attached to the scanned session.
 - Four rules (`tui-rt-width-drift`, `tui-rt-nested-borders`, `tui-rt-truecolor-on-256`, `tui-rt-spinner-never-rests`) are unmeasured on real programs; `tui-rt-no-key-hints` assumes the bottom row is a footer and misfires on scrolling tables and bare pager prompts.
 
+## Known gaps after PR 4
+
+Recorded from the PR 4 final review. Neither is fixed in PR 4.
+
+- The width-drift test (overflow no larger than the row's count of two-cell glyphs) also passes for wrapped CJK or emoji prose: a joined row of n two-cell glyphs overflows by 2n minus the pane width, which is at most n whenever n is at most the pane width, so a CJK sentence the terminal wrapped once reads as width drift. A follow-up could also require a vertical border glyph at the row's end.
+- `tui-rt-no-key-hints`'s first-row exemption reuses the whole key-hint pattern, including bracketed and angle-bracketed tokens and a bare `?`, so a log viewer whose first row starts `[INFO]`, or any first row containing `?`, silences the rule. The rule is advisory, so this is a false negative only.
+
 ## Appendix A: research report
 
 The sourced research this spec distills is `docs/superpowers/research/2026-09-24-terminal-design-research.md` (72 sources). Its distillation section is the origin of `terminal.md`'s bullets and the rule table.
