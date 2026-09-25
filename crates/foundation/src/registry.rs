@@ -904,7 +904,7 @@ pub static ANTIPATTERNS: &[Antipattern] = &[
         severity: Some("advisory"),
         platforms: Some(&["terminal"]),
         name: "Spinner still cycling with no input",
-        description: "A spinner glyph keeps changing across two captures a second apart with nothing to wait for. Show a spinner only while work is pending and replace it with the result.",
+        description: "A spinner glyph keeps changing across captures taken within one second with nothing to wait for. Show a spinner only while work is pending and replace it with the result.",
         skill_section: None,
         skill_guideline: None,
     },

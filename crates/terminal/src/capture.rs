@@ -42,7 +42,7 @@ pub enum FrameRole {
     /// A capture at a size the run asked for.
     #[default]
     Capture,
-    /// The pane's own size again, one second after the first capture.
+    /// The pane's own size again, 700 ms or 1000 ms after the first capture.
     Recapture,
 }
 

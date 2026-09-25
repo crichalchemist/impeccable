@@ -40,15 +40,20 @@ re!(PAGER_PROMPT_RE, r"\(END\)|--More--|\blines \d+-\d+");
 
 /// Every runtime rule over the frames of one target, in the frame policy
 /// spec section 5 fixes: size-invariant rules on the first frame, the spinner
-/// against the recapture, geometry on every capture frame.
+/// against each recapture, geometry on every capture frame.
 pub fn scan_frames(frames: &[Frame], palette: Palette, file: &str) -> Vec<Finding> {
     let mut out = Vec::new();
     let Some(first) = frames.first() else { return out };
     out.extend(rt_low_contrast(first, palette, file));
     out.extend(rt_truecolor_on_256(first, file));
     out.extend(rt_no_key_hints(first, file));
-    if let Some(second) = frames.iter().find(|f| f.role == FrameRole::Recapture) {
-        out.extend(rt_spinner_never_rests(first, second, file));
+    // Frame 0 against each recapture, in order; one finding at most.
+    for recapture in frames.iter().filter(|f| f.role == FrameRole::Recapture) {
+        let found = rt_spinner_never_rests(first, recapture, file);
+        if !found.is_empty() {
+            out.extend(found);
+            break;
+        }
     }
     for frame in frames.iter().filter(|f| f.role == FrameRole::Capture) {
         out.extend(rt_nested_borders(frame, file));
@@ -187,7 +192,7 @@ pub fn rt_spinner_never_rests(first: &Frame, second: &Frame, file: &str) -> Vec<
         for (c, cell) in row.iter().enumerate() {
             let (Some(a), Some(b)) = (cell.glyph, second.glyph(r, c)) else { continue };
             if a != b && is_spinner(a) && is_spinner(b) {
-                let snippet = format!("spinner glyph {a} became {b} after one second with no input");
+                let snippet = format!("spinner glyph {a} became {b} between captures with no input");
                 return vec![rt_finding("tui-rt-spinner-never-rests", file, first, r, c, snippet)];
             }
         }
@@ -510,10 +515,26 @@ pub(crate) mod tests {
         let out = rt_spinner_never_rests(&a, &b, "x");
         assert_eq!(out.len(), 1, "one finding per pair, at the first cycling cell");
         assert_eq!((out[0].line, out[0].extras["column"].clone()), (1.0, Value::from(9)));
-        assert_eq!(out[0].snippet, "spinner glyph ⠋ became ⠙ after one second with no input");
+        assert_eq!(out[0].snippet, "spinner glyph ⠋ became ⠙ between captures with no input");
         assert!(rt_spinner_never_rests(&a, &a, "x").is_empty(), "a resting glyph is fine");
         let c = frame(40, &["working ✓  ✓", "│ x │", HINTS]);
         assert!(rt_spinner_never_rests(&a, &c, "x").is_empty(), "a spinner that resolved is fine");
+    }
+
+    #[test]
+    fn the_spinner_is_compared_with_each_recapture_and_reported_once() {
+        let first = frame(40, &["working ⠋", "│ x │", HINTS]);
+        let mut same = frame(40, &["working ⠋", "│ x │", HINTS]);
+        same.role = FrameRole::Recapture;
+        let mut moved = frame(40, &["working ⠙", "│ x │", HINTS]);
+        moved.role = FrameRole::Recapture;
+        let spinner = |frames: &[Frame]| {
+            scan_frames(frames, Palette::Dark, "x").into_iter().filter(|f| f.antipattern == "tui-rt-spinner-never-rests").count()
+        };
+        assert_eq!(spinner(&[first.clone(), same.clone(), moved.clone()]), 1, "the differing recapture need not be the first");
+        assert_eq!(spinner(&[first.clone(), moved.clone(), moved.clone()]), 1, "two differing recaptures still make one finding");
+        assert_eq!(spinner(&[first.clone(), same.clone()]), 0, "a PR 3 file with one matching recapture");
+        assert_eq!(spinner(&[first, moved]), 1, "a PR 3 file with one differing recapture still replays");
     }
 
     #[test]

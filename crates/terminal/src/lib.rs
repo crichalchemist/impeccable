@@ -11,7 +11,7 @@ pub mod tmux;
 
 use std::collections::HashMap;
 use std::thread::sleep;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use impeccable_core::findings::Finding;
 use impeccable_detect::engines::{EngineError, ScanOptions, TmuxEngine};
@@ -20,8 +20,10 @@ use capture::{parse_frames, parse_rows, Frame, FrameRole};
 use palette::Palette;
 use tmux::{PaneInfo, Tmux};
 
-/// The gap between the first capture and the recapture.
-pub const RECAPTURE_DELAY_MS: u64 = 1000;
+/// When the recaptures are taken, in milliseconds after frame 0 (spec
+/// section 7, PR 4 item 2). A 100 ms animation aliases at 1000 ms and not
+/// at 700 ms.
+pub const RECAPTURE_DELAYS_MS: [u64; 2] = [700, 1000];
 /// `--tmux-settle` when the flag is absent.
 pub const DEFAULT_SETTLE_MS: u64 = 300;
 
@@ -82,9 +84,13 @@ impl TmuxEngine for TerminalEngine {
         let colorterm = self.colorterm();
         let first = tmux.capture(target).map_err(EngineError::new)?;
         let mut frames = vec![frame_from(&first, &info, &colorterm, FrameRole::Capture)];
-        sleep(Duration::from_millis(RECAPTURE_DELAY_MS));
-        let second = tmux.capture(target).map_err(EngineError::new)?;
-        frames.push(frame_from(&second, &info, &colorterm, FrameRole::Recapture));
+        // Both delays count from the end of frame 0's capture.
+        let taken = Instant::now();
+        for delay in RECAPTURE_DELAYS_MS {
+            sleep(Duration::from_millis(delay).saturating_sub(taken.elapsed()));
+            let again = tmux.capture(target).map_err(EngineError::new)?;
+            frames.push(frame_from(&again, &info, &colorterm, FrameRole::Recapture));
+        }
         if !options.tmux_sizes.is_empty() {
             let captured = capture_sizes(&tmux, target, options, &colorterm, &mut frames);
             let restored = tmux.restore(target, info.window_width, info.window_height);
@@ -244,6 +250,22 @@ esac
         let options = ScanOptions { tmux_sizes: vec![(30, 5)], tmux_settle_ms: Some(0), ..ScanOptions::default() };
         let err = engine.detect_pane("smoke:0.0", &options).unwrap_err();
         assert_eq!(err.message, "window not restored: tmux set-option: boom");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_pane_scan_recaptures_twice_and_the_last_waits_a_full_second() {
+        let (dir, fake) = fake_tmux("impeccable-terminal-recaptures", &fake_tmux_for_restore_scenarios(false, false));
+        let mut env = HashMap::new();
+        env.insert("IMPECCABLE_TMUX".to_string(), fake.to_string_lossy().into_owned());
+        let start = std::time::Instant::now();
+        TerminalEngine::new(env).detect_pane("smoke:0.0", &ScanOptions::default()).unwrap();
+        let elapsed = start.elapsed();
+        let log = std::fs::read_to_string(dir.join("calls.log")).unwrap();
+        assert_eq!(log.lines().filter(|&c| c == "capture-pane").count(), 3, "frame 0 and two recaptures: {log}");
+        assert!(!log.lines().any(|c| c == "resize-window"), "no sizes, no resize");
+        assert!(elapsed >= std::time::Duration::from_millis(1000), "the last recapture waits 1000 ms: {elapsed:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
