@@ -1,7 +1,7 @@
 # Terminal platform: design guidance, source rules, and a tmux engine
 
 Date: 2026-09-24
-Status: approved in conversation, awaiting written review
+Status: approved in conversation; PR 1 merged (ed600fd0) and PR 2 merged (86679d9d) on the fork; section 4's PR 3 table and section 5 expanded on 2026-09-24 for PR 3 planning
 Fork: crichalchemist/impeccable, upstream pbakaus/impeccable
 
 ## Summary
@@ -221,47 +221,91 @@ Deferred, with the reason:
 
 ### PR 3 runtime rules
 
-Each runtime rule is the capture-side cousin of a source rule, so a reader learns one vocabulary. Ids carry `tui-rt-`.
+Each runtime rule is the capture-side cousin of a source rule, so a reader learns one vocabulary. Ids carry `tui-rt-`. The `frames` column uses section 5's vocabulary: which captured frames a rule reads.
 
-| id | signal over the capture |
-|---|---|
-| `tui-rt-low-contrast` | a rendered foreground and background pair below 4.5:1 on the reported palette; with `--palette light`, evaluated on a reference light palette for named ANSI colors |
-| `tui-rt-nested-borders` | a closed box-drawing rectangle fully inside another with no focusable content difference |
-| `tui-rt-truecolor-on-256` | `38;2;` or `48;2;` SGR present while the client reports 256 colors or fewer |
-| `tui-rt-width-drift` | a row whose cell count differs from the pane width after width-aware measurement, on rows containing emoji or CJK |
-| `tui-rt-no-key-hints` | the bottom row contains no key-like token (`q`, `Esc`, `Ctrl`, `?`, `Enter`, angle-bracketed or bracketed keys) |
-| `tui-rt-collapse-narrow` | at 40 columns: broken border runs, words split mid-cell, or content overflowing the grid |
-| `tui-rt-spinner-never-rests` | across two captures one second apart with no input, a cell cycling through a spinner glyph set |
+| id | category | frames | signal over the capture |
+|---|---|---|---|
+| `tui-rt-low-contrast` | quality | first | a foreground and background pair below 4.5:1 on the palette, over cells whose glyph is alphanumeric; one finding per distinct pair at its first cell, with `cellCount` in extras |
+| `tui-rt-nested-borders` | slop | every capture frame | a closed box-drawing rectangle whose nearest enclosing rectangle has only blank cells between the two borders; corners are `┌┐└┘╭╮╰╯╔╗╚╝┏┓┗┛`, edges may carry tees, and the top edge may carry a title |
+| `tui-rt-truecolor-on-256` | quality | first | a cell colored by `38;2` or `48;2` while `termfeatures` is known, lacks `RGB`, and `colorterm` is neither `truecolor` nor `24bit`; one finding per frame |
+| `tui-rt-width-drift` | quality | every capture frame | a row holding a wide (two-cell) glyph that measures wider than the pane, or whose last vertical border sits on a different column than the column most rows end on |
+| `tui-rt-no-key-hints` | quality | first | the last non-blank row matches no key token (`q`, `Esc`, `Enter`, `Tab`, `Space`, `Ctrl`, `Alt`, `Shift`, `F1` to `F12`, `h j k l`, `?`, arrows, `<x>`, `[x]`, `^X`); silent when the frame has fewer than three non-blank rows |
+| `tui-rt-collapse-narrow` | quality | capture frames under 60 columns | a row wider than the pane; a row with a left corner and no right corner; a row that fills the pane, ends in a letter, and is followed by a row starting with one |
+| `tui-rt-spinner-never-rests` | quality | first against the recapture | a cell whose glyph is in the spinner set (braille U+2800 to U+28FF, `|/-\`, quarter circles, block bars) in both frames and differs between them; one finding |
+
+All seven ship at `advisory` with `platforms: Some(&["terminal"])`, appended after `tui-print-in-loop`, so `antipatterns.json` grows from 72 to 79 rows and web output stays byte-identical. They never run in the hook or the text engine; only `--tmux` and `--tmux-capture` reach them, on any resolved platform, because the flag itself is the request.
 
 ## Section 5: the tmux engine
 
+Expanded on 2026-09-24 while planning PR 3, after PR 1 and PR 2 landed. The original text named the shape; this version fixes the vocabulary, the file format, the flags, the messages, and where every piece lives, so the plan can be checked against it.
+
+### Vocabulary
+
+- `frame` is one parsed capture: a cell grid plus width, height, `termfeatures`, `colorterm`, and a role.
+- `capture frame` is a frame taken at a size the run asked for: the pane's own size first, then each `--tmux-sizes` entry.
+- `recapture` is the second frame of the pane's own size, taken one second after the first with no input in between. Only `tui-rt-spinner-never-rests` reads it.
+- `header` is the `#!capture` line that introduces a frame in a saved capture file.
+- `palette` is the reference mapping from SGR colors to sRGB used for contrast: `dark` (default) or `light`.
+
 ### Shape
 
-A new crate `crates/terminal` mirroring `crates/browser`: a `TmuxEngine` built from the process environment, a capture parser, and rule adapters. `Engines` gains `tmux: Option<&dyn TmuxEngine>`. `crates/cli` wires it the way it wires the URL engine.
+A new crate `crates/terminal` (`impeccable-terminal`) mirroring `crates/browser`: it depends on `impeccable-core` (findings, registry, color) and `impeccable-detect` (the engine seam) and adds one external crate, `unicode-width`, for cell widths. It holds four modules: `capture` (the SGR parser and the frame model), `palette` (ANSI 16, the 256-color cube and grays, truecolor, the two reference palettes), `rules` (one function per runtime rule over frames), and `tmux` (locating the executable, the version check, pane geometry, capture, resize, restore). The runtime rules live in this crate, not in `crates/core`: nothing else consumes them, and the wasm bundle must not carry tmux code. The registry rows still live in `crates/foundation`, so `cargo xtask bundle` lists them in `antipatterns.json`.
 
-### Input is a pane, not a command
+`crates/detect` gains the seam: `trait TmuxEngine { detect_pane(target, &ScanOptions); detect_capture(path, &ScanOptions) }`, `Engines.tmux: Option<&dyn TmuxEngine>`, a `MissingTmuxEngine` for builds without the crate, and three `ScanOptions` fields (`tmux_sizes: Vec<(u32, u32)>`, `tmux_settle_ms: Option<u64>`, `palette: Option<String>`). `crates/cli` wires `impeccable_terminal::TerminalEngine::from_process_env()` the way it wires the browser engine.
 
-`impeccable detect --tmux <session:window.pane>` captures an already running app. The engine never launches or kills a process. The agent starts the app in tmux following `terminal.md`'s verification section. This keeps the engine deterministic and avoids a second orphaned-process problem of the kind the live-server reaper exists to solve.
+### Input is a pane or a saved capture
 
-### Capture
+`impeccable detect --tmux <session:window.pane>` captures an already running app. The engine never launches or kills a process, and it never leaves a window resized; the agent starts the app in tmux following `terminal.md`'s verification section. The engine talks to whatever server the `tmux` client resolves: the socket in `$TMUX` inside a session, else the default socket. `IMPECCABLE_TMUX` names the executable when it is not on `PATH`, the override pattern `IMPECCABLE_BROWSER` set.
 
-`tmux capture-pane -p -e -J -t <target>` returns the visible grid with SGR sequences preserved. The parser produces a `TerminalSnapshot`: a grid of cells with glyph, foreground, background, and attributes, plus pane width and height, the client's color depth from `tmux display -p '#{client_termfeatures}'`, and `COLORTERM` from the environment. The parser is a pure function over captured text, so goldens replay from fixture files without tmux.
+`impeccable detect --tmux-capture <file>` replays a saved capture without tmux. It exists for the oracle, for CI, and for the review flow: an agent that saved `tmux capture-pane -p -e -J` output while following `terminal.md` can scan the file later. Both flags are repeatable and combine with file targets; when either is present and no file target is given, the run does not fall back to scanning the working directory.
+
+### Capture and the frame model
+
+`tmux capture-pane -p -e -J -t <target>` returns the visible rows with SGR sequences preserved and trailing blanks trimmed (tmux's default). The parser walks each row: an SGR sequence updates the current style (parameters 0, 1, 2, 5, 7, 22, 25, 27, 30 to 37, 39, 40 to 47, 49, 90 to 97, 100 to 107, `38;5;n`, `48;5;n`, `38;2;r;g;b`, `48;2;r;g;b`; anything else is ignored); every other character becomes a cell carrying the style. A character `unicode-width` measures at two takes two cells, the second marked as a wide tail; a zero-width character (combining marks, ZWJ, variation selectors) takes none. Row width is the cell count. The parser is a pure function over text, so goldens replay from fixture files.
+
+A saved capture file holds one or more frames. Each frame begins with a header:
+
+    #!capture width=80 height=24 termfeatures=256,RGB colorterm=truecolor role=capture
+
+Every key is optional (`role` is `capture` or `recapture`; an unknown key, an unknown role, or a non-numeric size is an error). A file without a header is one capture frame whose width is its widest row and whose height is its row count, with unknown `termfeatures`. Pane scans fill the same fields from `tmux display-message -p -t <target>` (`#{pane_width}`, `#{pane_height}`, `#{window_width}`, `#{window_height}`, `#{client_termfeatures}`) and from `COLORTERM` in the engine's environment. `termfeatures` is empty when no client is attached to the session; the rule that reads it stays silent then.
 
 ### Multi-size pass
 
-`--tmux-sizes 80x24,120x40,40x24` resizes with `tmux resize-window -x -y`, waits a configurable settle time (default 300 ms), captures, and restores the original size. `adapt.terminal.md` gets evidence for its width classes in one command.
+A pane scan takes frames in this order: the pane's own size; the recapture one second later; then, for each `--tmux-sizes WxH`, `tmux resize-window -t <target> -x W -y H`, a settle of `--tmux-settle` milliseconds (default 300), and a capture with the pane geometry read again. After the sizes the engine runs `resize-window` back to the recorded window size and `set-option -w -t <target> -u window-size`, so the window follows its clients again instead of keeping the `manual` size `resize-window` set. The restore runs even when a capture failed. `adapt.terminal.md` gets evidence for its three width classes in one command.
+
+### Rules over frames
+
+Size-invariant rules read the first frame only: `tui-rt-low-contrast`, `tui-rt-truecolor-on-256`, `tui-rt-no-key-hints`. `tui-rt-spinner-never-rests` compares the first frame with the recapture. Geometry rules run on every capture frame and never on the recapture: `tui-rt-nested-borders`, `tui-rt-width-drift`, and, on frames narrower than 60 columns (the Narrow class in `adapt.terminal.md`), `tui-rt-collapse-narrow`. Section 4's PR 3 table carries the exact signals.
+
+### Palette
+
+`--palette dark` (default) and `--palette light` differ only in the default foreground and background: white on black, black on white. Named colors 0 to 15 use xterm's table in both, the 256-color cube and grays use their standard formula, and truecolor is taken as written. `reverse` swaps the pair; `bold` and `dim` do not change the color. Contrast is WCAG 2.x through `impeccable_core::color::contrast_ratio`, floor 4.5:1, over cells whose glyph is alphanumeric, so borders and decorations never count as text.
 
 ### Output
 
-Findings use the existing `Finding` shape with `line` set to the row and `column` to the cell. `--json` output is the same envelope `detect` prints for URLs.
+Findings use the existing `Finding` shape: `file` is `tmux:<target>` for a pane and the resolved path for a saved capture; `line` is the 1-based row; `extras` carry `column` (1-based cell) and `frame` (`WxH`), and `tui-rt-low-contrast` adds `cellCount`. `--json` prints the same array `detect` prints for files and URLs; text mode prints `line N: [id] snippet`. Every runtime rule ships at `advisory`, so a pane scan exits 0 unless a target failed. `ignoreRules`, `--scope`, and `--no-advisory` apply as for every other finding.
+
+### Flags and messages
+
+| flag | value | error (stderr, exit 1) |
+|---|---|---|
+| `--tmux <target>` | a tmux target | `Error: --tmux requires a tmux target, e.g. --tmux app:0.0` |
+| `--tmux-capture <file>` | a saved capture | `Error: --tmux-capture requires a path to a saved capture` |
+| `--tmux-sizes <list>` | comma-separated `WxH`, each side one to four digits | `Error: --tmux-sizes requires comma-separated WxH values, e.g. --tmux-sizes 80x24,120x40,40x24` |
+| `--tmux-settle <ms>` | whole milliseconds | `Error: --tmux-settle requires a whole number of milliseconds` |
+| `--palette <name>` | `dark` or `light` | `Error: --palette requires dark or light` |
+
+Values are spliced out of the argument list like `--viewport`'s, so they never become targets; the `--flag=value` form works for all five.
 
 ### Requirements and degradation
 
-tmux 3.2 or newer. Without tmux on PATH, `--tmux` prints one line naming the requirement and exits 1, matching the URL engine's message when no browser is found.
+tmux 3.2 or newer (`resize-window -x -y` and `client_termfeatures` both need it). The engine locates tmux through `IMPECCABLE_TMUX`, else `PATH`, and checks `tmux -V`. Without tmux, `--tmux` prints one line, `Error: tmux 3.2 or newer is required for --tmux and was not found on PATH. Install tmux, or point IMPECCABLE_TMUX at the executable.`, sets the operational failure, and the run exits 1 the way a URL scan with no browser does. An older tmux prints `Error: tmux 3.2 or newer is required for --tmux; found <tmux -V output>`. A target tmux cannot find surfaces tmux's own first stderr line as `Error: tmux display-message: <line>`. A `--tmux-capture` file that cannot be read is reported as `Error: cannot scan <file>: <ENOENT or EACCES message>`, like any local file. `--tmux-capture` needs no tmux at all.
 
 ### Oracle and tests
 
-Goldens recorded from capture fixtures under `tests/fixtures/terminal-captures/<case>.txt`. One integration test, `tests/tmux-engine.test.mjs`, boots a fixture script in a scratch tmux server (`tmux -L impeccable-test`), captures, and asserts findings; it skips when `which tmux` fails. The scratch server is killed in `after()` and by the test runner's process-group guard.
+Capture fixtures under `tests/fixtures/terminal-captures/<rule>.txt`, one per runtime rule plus `sizes-pass.txt` (three well-behaved frames that produce `[]`), are inputs written by hand with headers; the goldens `detect-tmux-capture-<name>` are recorded from the binary with `--tmux-capture`. Further cases pin the text renderer, `--palette light` on the contrast fixture, a missing capture file, a missing tmux binary (the case runs with `PATH` pointing at a directory that does not exist and no `IMPECCABLE_TMUX`), and each flag's error. `detect-help` is re-recorded for the new usage lines; `context-terminal` moves because `terminal.md` gains a bullet.
+
+One integration test, `tests/tmux-engine.test.mjs`, starts a scratch server (`tmux -L impeccable-test-<pid>`) running `tests/fixtures/terminal-apps/nested-boxes.sh`, points the engine at it through an `IMPECCABLE_TMUX` wrapper script that adds `-L`, runs `--tmux app:0.0 --tmux-sizes 40x24`, asserts the expected rule ids and that the window is back at 80x24, and kills the server in `after()`. It skips without a binary or without tmux. It is registered in the `oracle` suite of `scripts/test-suites.mjs` (a second command, triggered by `crates/terminal/` and the two fixture directories) and runs in CI's oracle job after the golden replay.
 
 ## Section 6: testing, documentation, delivery
 
@@ -279,9 +323,9 @@ Gates: `cargo test --workspace`; `cargo xtask bundle --check`; the section 3 ora
 
 ### PR 3, tmux engine
 
-Files: `crates/terminal`, `crates/detect` (`Engines` slot, `--tmux`, `--tmux-sizes`, `--palette`), `crates/cli`, registry rows for runtime rules, `tests/fixtures/terminal-captures/`, `tests/tmux-engine.test.mjs`, `terminal.md`'s verification section, `docs/CLI-CONTRACT.md`, `docs/ENGINE.md` layout table.
+Files: `crates/terminal` (new crate, four modules), the root `Cargo.toml` (workspace dependency), `crates/detect` (`TmuxEngine`, `MissingTmuxEngine`, `Engines.tmux`, three `ScanOptions` fields, the five flags, `scan_tmux_targets`, USAGE), `crates/cli` (wiring and dependency), `crates/foundation/src/registry.rs` (seven rows), the two tracked assets from `cargo xtask bundle`, `tests/fixtures/terminal-captures/`, `tests/fixtures/terminal-apps/nested-boxes.sh`, `tests/tmux-engine.test.mjs`, `scripts/test-suites.mjs`, `.github/workflows/ci.yml` (one step in the oracle job), `tests/oracle/cases/detect.mjs`, goldens and `DELTAS.md`, `skill/reference/terminal.md` (a verification bullet), `audit.terminal.md`, `adapt.terminal.md`, `README.md` and `README.npm.md` counts (72 to 79), `docs/CLI-CONTRACT.md`, `docs/ENGINE.md`, the root `CLAUDE.md`.
 
-Gates: as PR 2 plus the integration test.
+Gates: as PR 2 plus `node --test tests/tmux-engine.test.mjs` with tmux installed, and a manual `--tmux` pass over real terminal programs (a Ratatui example, `vim`, `top`, `less`, plus any Bubble Tea or Textual app that is installed) recorded before any runtime rule leaves `advisory`.
 
 ### Test naming
 
@@ -299,7 +343,19 @@ No manifest bumps and no changelog entries in any PR. PR 2 and PR 3 change engin
 
 ## Open questions
 
-None blocking. Two calibration decisions are deferred to PR 2's manual pass: the emoji-density threshold (proposed 8 per file) and whether `tui-hardcoded-size` should exempt files under `examples/`.
+PR 2's two calibration questions were settled by its manual pass (`docs/superpowers/research/2026-09-24-terminal-rules-manual-pass.md`): the emoji thresholds stay at 8 and 3, and `tui-hardcoded-size` is marked tighten-before-promotion rather than exempting `examples/`.
+
+Two questions are deferred to PR 3's manual pass. Whether one second is the right recapture window for `tui-rt-spinner-never-rests`: a spinner over real pending work is legitimate and will fire, which is why the rule is advisory. And whether `client_termfeatures` is populated when the scan runs from outside the session; if it is not, `tui-rt-truecolor-on-256` fires only on saved captures whose header names the features.
+
+## Known gaps after PR 1 and PR 2
+
+Recorded here so they are not lost; none is in PR 3's scope.
+
+- Skill text: native-only branches in `SKILL.src.md`, `polish.md`, and `new-work.md` that `terminal` falls through; `live.md` has no terminal guard; `audit.terminal.md` scores 60 columns where this spec said 40; `adapt.terminal.md` leaves a 60 to 79 column gap; concept-seed does not forward `platform=terminal` to the private roll API.
+- Init evidence: `// indirect` go.mod lines count as evidence; the matchers miss pyproject inline arrays, Cargo dotted keys and table headers, and capitalized PyPI names; `rich` or `crossterm` alone is weak evidence; `staleness.rs` misses Charm v2 `charm.land/...` module paths.
+- Source rules: `tui-print-in-loop`'s Ink premise was inverted in the original section 4 row (Ink's default is `patchConsole: true`, so PR 2 flags only `patchConsole: false`), and its Textual half is unverified; `ora` and Rich `Live` and `Status` self-guard on a non-TTY, so `tui-spinner-no-tty-guard` likely over-reports them; the emoji range U+2600 to U+27BF catches dingbats and the threshold is `>= 8` where the row says "above 8"; `chalk.hex(` with a computed argument is missed; `tui-hardcoded-size` needs tightening before promotion.
+- Routing: `crates/context/src/signals.rs` `scan_targets` is not platform-aware, so routing's detect run skips terminal source.
+- Process: a CLI driver (headless agents with stream-json) for the skill-behavior suite is its own brainstorm.
 
 ## Appendix A: research report
 
