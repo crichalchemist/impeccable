@@ -294,12 +294,24 @@ pub fn check_native_platform_evidence(
     product: Option<&str>,
     product_path: Option<&str>,
 ) -> Vec<Finding> {
+    native_platform_evidence(project_root, platform, product, product_path).map(|(f, _)| f).into_iter().collect()
+}
+
+/// The `platform-native-evidence` finding and the platform it suggests
+/// (`terminal`, `ios`, `android`, or `adaptive`). `check_workspaces` reads the
+/// suggestion to word its own sentence.
+pub fn native_platform_evidence(
+    project_root: &str,
+    platform: Option<&str>,
+    product: Option<&str>,
+    product_path: Option<&str>,
+) -> Option<(Finding, &'static str)> {
     if project_root.is_empty() {
-        return vec![];
+        return None;
     }
     if let Some(p) = platform {
         if !p.is_empty() && p != "web" {
-            return vec![];
+            return None;
         }
     }
     let mut evidence: Vec<NativeEvidence> = Vec::new();
@@ -346,9 +358,9 @@ pub fn check_native_platform_evidence(
         }
     }
     if evidence.is_empty() {
-        return vec![];
+        return None;
     }
-    let mut platforms: Vec<&str> = Vec::new();
+    let mut platforms: Vec<&'static str> = Vec::new();
     for e in &evidence {
         if !platforms.contains(&e.platform) {
             platforms.push(e.platform);
@@ -357,8 +369,8 @@ pub fn check_native_platform_evidence(
     // Mobile evidence outranks terminal evidence: a Flutter app with a Rust
     // helper is still a mobile app. Terminal is suggested only when it is the
     // only kind of evidence present.
-    let mobile: Vec<&str> = platforms.iter().copied().filter(|p| *p != "terminal").collect();
-    let suggested = if mobile.is_empty() {
+    let mobile: Vec<&'static str> = platforms.iter().copied().filter(|p| *p != "terminal").collect();
+    let suggested: &'static str = if mobile.is_empty() {
         "terminal"
     } else if mobile.len() > 1 || mobile.contains(&"adaptive") {
         "adaptive"
@@ -378,22 +390,25 @@ pub fn check_native_platform_evidence(
     } else {
         "no PRODUCT.md declares a platform, so the project resolves to web"
     };
-    vec![finding(
-        "platform-native-evidence",
-        "PRODUCT.md",
-        product_path.map(|s| s.to_string()),
-        "mention",
-        format!(
-            "{}, but the project carries {}. {}",
-            declared,
-            evidence.iter().map(|e| e.reason).collect::<Vec<_>>().join(" and "),
-            consequence
+    Some((
+        finding(
+            "platform-native-evidence",
+            "PRODUCT.md",
+            product_path.map(|s| s.to_string()),
+            "mention",
+            format!(
+                "{}, but the project carries {}. {}",
+                declared,
+                evidence.iter().map(|e| e.reason).collect::<Vec<_>>().join(" and "),
+                consequence
+            ),
+            format!(
+                "Ask the user whether `## Platform` should be `{}`. If it should, write the value and load the matching {} reference before designing.",
+                suggested, reference
+            ),
         ),
-        format!(
-            "Ask the user whether `## Platform` should be `{}`. If it should, write the value and load the matching {} reference before designing.",
-            suggested, reference
-        ),
-    )]
+        suggested,
+    ))
 }
 
 pub fn js_truthy(v: &Value) -> bool {

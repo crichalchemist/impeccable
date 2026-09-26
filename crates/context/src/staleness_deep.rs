@@ -4,7 +4,7 @@ use crate::context::{extract_platform, TargetCandidate};
 use crate::design_parser::parse_design_md;
 use crate::jsp;
 use crate::signals::git_run;
-use crate::staleness::{check_native_platform_evidence, finding, js_truthy, to_relative, unique_roots, Finding};
+use crate::staleness::{finding, js_truthy, native_platform_evidence, to_relative, unique_roots, Finding};
 use crate::util::{exists, js_trim, read_json, safe_read};
 use once_cell::sync::Lazy;
 use regex::Regex;
@@ -384,18 +384,22 @@ pub fn check_workspaces(repo_root: &str, candidates: &[TargetCandidate]) -> (Vec
                 }
             }),
         });
-        let native = check_native_platform_evidence(&workspace_root, platform.as_deref(), product.as_deref(), c.product_path.as_deref());
-        for entry in native {
+        if let Some((entry, suggested)) =
+            native_platform_evidence(&workspace_root, platform.as_deref(), product.as_deref(), c.product_path.as_deref())
+        {
             let inherited = c.product_status == "inherited";
+            // Terminal evidence is a dependency line in a manifest, not a build file.
+            let carries = if suggested == "terminal" { "terminal dependencies" } else { "native build files" };
             findings.push(finding(
                 "workspace-platform-native-evidence",
                 "PRODUCT.md",
                 Some(c.product_path.clone().unwrap_or_else(|| format!("{}/PRODUCT.md", c.path))),
                 "mention",
                 format!(
-                    "Workspace `{}` {} that resolves to web, but the workspace itself carries native build files. {}",
+                    "Workspace `{}` {} that resolves to web, but the workspace itself carries {}. {}",
                     c.path,
                     if inherited { "inherits the repo-root PRODUCT.md" } else { "has a PRODUCT.md" },
+                    carries,
                     entry.summary
                 ),
                 if inherited {
@@ -435,7 +439,8 @@ pub fn load_known_rule_ids() -> Option<Vec<String>> {
 
 #[cfg(test)]
 mod tests {
-    use super::check_hook_installation;
+    use super::{check_hook_installation, check_workspaces};
+    use crate::context::TargetCandidate;
 
     static TMP_SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
@@ -495,6 +500,37 @@ mod tests {
         assert_eq!(f.len(), 1, "{f:?}");
         write(&root, ".claude/skills/impeccable/scripts/hook.mjs", "");
         assert!(check_hook_installation(&root, None, "claude-code").is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn workspace_terminal_evidence_is_worded_as_dependencies_and_mobile_as_build_files() {
+        let root = tmp();
+        write(&root, "apps/tui/Cargo.toml", "[dependencies]\nratatui = \"0.29\"\n");
+        write(&root, "apps/phone/ios/Podfile", "platform :ios, '15.0'\n");
+        let candidate = |name: &str| TargetCandidate {
+            name: name.to_string(),
+            path: format!("apps/{name}"),
+            target_example: format!("apps/{name}/src/main.rs"),
+            product_status: "missing",
+            product_path: None,
+            design_status: "missing",
+            design_path: None,
+        };
+        let (findings, _) = check_workspaces(&root, &[candidate("tui"), candidate("phone")]);
+        let summary_for = |path: &str| {
+            findings
+                .iter()
+                .find(|f| f.id == "workspace-platform-native-evidence" && f.summary.contains(path))
+                .unwrap_or_else(|| panic!("no evidence finding for {path}: {findings:?}"))
+                .summary
+                .clone()
+        };
+        let tui = summary_for("`apps/tui`");
+        assert!(tui.contains("the workspace itself carries terminal dependencies."), "{tui}");
+        assert!(!tui.contains("native build files"), "{tui}");
+        let phone = summary_for("`apps/phone`");
+        assert!(phone.contains("the workspace itself carries native build files."), "{phone}");
         let _ = std::fs::remove_dir_all(&root);
     }
 }
