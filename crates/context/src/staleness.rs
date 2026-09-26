@@ -82,7 +82,7 @@ const TERMINAL_EVIDENCE_MANIFESTS: [(&str, &[(&str, &str)]); 4] = [
 fn manifest_names_dependency(manifest: &str, text: &str, name: &str) -> bool {
     match manifest {
         "go.mod" => go_mod_requires(text, name),
-        "Cargo.toml" => line_names_dependency(text, name),
+        "Cargo.toml" => cargo_names_dependency(text, name),
         _ => python_names_dependency(text, name),
     }
 }
@@ -189,25 +189,24 @@ fn pep503_normalize(name: &str) -> String {
     out
 }
 
-/// The PR 1 line-prefix scanner. Tasks 3 to 5 of the PR 6 plan replace it
-/// manifest by manifest; it is deleted once Cargo.toml has its own parser.
-fn line_names_dependency(text: &str, name: &str) -> bool {
+/// Cargo.toml: a key line naming the crate (`ratatui = "0.29"`,
+/// `ratatui.workspace = true`, `"ratatui" = ...`) or a table header ending in
+/// `dependencies.ratatui]` (`[dependencies.ratatui]`,
+/// `[target.'cfg(unix)'.dependencies.ratatui]`). `#` comments are ignored.
+fn cargo_names_dependency(text: &str, name: &str) -> bool {
+    let header_tail = format!("dependencies.{}]", name);
     text.lines().any(|line| {
-        let t = line.trim_start().trim_start_matches(|c| c == '"' || c == '\'');
-        let t = t.strip_prefix("require ").map(str::trim_start).unwrap_or(t);
-        if !t.starts_with(name) {
-            return false;
+        let t = line.split('#').next().unwrap_or("").trim();
+        if t.starts_with('[') {
+            return t.ends_with(&header_tail);
         }
-        let rest = &t[name.len()..];
-        let rest = match rest.strip_prefix("/v") {
-            Some(after) if after.starts_with(|c: char| c.is_ascii_digit()) => {
-                after.trim_start_matches(|c: char| c.is_ascii_digit())
+        let key = t.strip_prefix('"').unwrap_or(t);
+        match key.strip_prefix(name) {
+            Some(rest) => {
+                let rest = rest.strip_prefix('"').unwrap_or(rest);
+                rest.starts_with(|c: char| c.is_whitespace() || c == '=' || c == '.')
             }
-            _ => rest,
-        };
-        match rest.chars().next() {
-            None => true,
-            Some(c) => !(c.is_alphanumeric() || c == '_' || c == '-' || c == '.' || c == '/'),
+            None => false,
         }
     })
 }
@@ -945,6 +944,36 @@ mod terminal_evidence_tests {
         );
         write(&root, "requirements.txt", "# textual==0.80.0\nhttpx==0.27.0\n");
         let f = check_native_platform_evidence(&root, None, None, None);
+        assert!(f.is_empty(), "{:?}", f.iter().map(|x| &x.summary).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn cargo_dotted_keys_and_dependency_headers_count() {
+        let bodies = [
+            "[dependencies]\nratatui.workspace = true\n",
+            "[dependencies]\nratatui.version = \"0.29\"\n",
+            "[dependencies.ratatui]\nversion = \"0.29\"\n",
+            "[target.'cfg(unix)'.dependencies.ratatui]\nversion = \"0.29\"\n",
+            "[workspace.dependencies]\n\"ratatui\" = \"0.29\" # tui\n",
+        ];
+        for (i, body) in bodies.iter().enumerate() {
+            let root = scratch(&format!("cargo-form-{i}"));
+            write(&root, "Cargo.toml", body);
+            let f = check_native_platform_evidence(&root, Some("web"), Some(WEB_PRODUCT), Some("PRODUCT.md"));
+            assert_eq!(f.len(), 1, "{body}");
+            assert!(f[0].summary.contains("a ratatui dependency"), "{body}: {}", f[0].summary);
+        }
+    }
+
+    #[test]
+    fn ratatui_named_only_in_package_metadata_is_not_a_dependency() {
+        let root = scratch("cargo-metadata");
+        write(
+            &root,
+            "Cargo.toml",
+            "[package]\nname = \"ratatui-notes\"\ndescription = \"ratatui demo\"\nkeywords = [\"ratatui\"]\n\n[dependencies]\ncrossterm = \"0.28\"\n",
+        );
+        let f = check_native_platform_evidence(&root, Some("web"), Some(WEB_PRODUCT), Some("PRODUCT.md"));
         assert!(f.is_empty(), "{:?}", f.iter().map(|x| &x.summary).collect::<Vec<_>>());
     }
 }
