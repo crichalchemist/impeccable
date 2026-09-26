@@ -14,6 +14,7 @@
  *   ctx-bad-platform   PRODUCT.md `## Platform` flutter + pubspec.yaml
  *   ctx-monorepo       pnpm-workspace + apps/a (own PRODUCT/DESIGN) + apps/b (inherits) + projectRoots
  *   ctx-legacy         unstamped PRODUCT.md with ## Register, DESIGN.json sidecar v1, bad config, orphan brief
+ *   ctx-terminal-go    PRODUCT.md `## Platform` terminal, go.mod + cmd/ + internal/, no package.json
  *   ctx-csp-*          one per detect-csp shape (append-arrays, append-string, middleware, meta, none)
  *   ctx-signals        git-initialised in setup() with fixed author/committer dates
  *   ctx-pin            .claude/.agents/.cursor skills dirs with impeccable installed
@@ -369,6 +370,18 @@ const cases = [
   { id: 'doctor-terminal-json', verb: 'doctor', workspace: 'ctx-terminal', args: ['--json'], env: env() },
   { id: 'doctor-terminal-evidence-text', verb: 'doctor', workspace: 'ctx-product-only', setup: (ws) => write(ws, 'go.mod', 'module example.com/app\n\ngo 1.22\n\nrequire github.com/charmbracelet/bubbletea v1.2.0\n'), env: env() },
   { id: 'doctor-terminal-evidence-json', verb: 'doctor', workspace: 'ctx-product-only', setup: (ws) => write(ws, 'go.mod', 'module example.com/app\n\ngo 1.22\n\nrequire github.com/charmbracelet/bubbletea v1.2.0\n'), args: ['--json'], env: env() },
+  // Charm v2 module paths count; an `// indirect` require and a `replace (` block do not.
+  {
+    id: 'doctor-terminal-evidence-charm-v2', verb: 'doctor', workspace: 'ctx-product-only',
+    setup: (ws) => write(ws, 'go.mod', 'module example.com/app\n\ngo 1.24\n\nrequire (\n\tcharm.land/bubbletea/v2 v2.0.0\n\tcharm.land/lipgloss/v2 v2.0.0\n\tcharm.land/bubbles/v2 v2.0.0 // indirect\n)\n\nreplace (\n\tgithub.com/charmbracelet/bubbles => ../bubbles-fork\n)\n'),
+    env: env(),
+  },
+  // The workspace sweep words terminal evidence as dependencies, not build files.
+  {
+    id: 'doctor-monorepo-terminal-evidence', verb: 'doctor', workspace: 'ctx-monorepo',
+    setup: (ws) => write(ws, 'apps/b/Cargo.toml', '[package]\nname = "b"\nversion = "0.1.0"\n\n[dependencies]\nratatui.workspace = true\n'),
+    args: ['--json'], env: env(),
+  },
   { id: 'doctor-bad-platform-text', verb: 'doctor', workspace: 'ctx-bad-platform', env: env() },
   { id: 'doctor-bad-platform-json', verb: 'doctor', workspace: 'ctx-bad-platform', args: ['--json'], env: env() },
   { id: 'doctor-monorepo-text', verb: 'doctor', workspace: 'ctx-monorepo', env: env() },
@@ -615,6 +628,7 @@ const cases = [
   { id: 'signals-full-with-critique', verb: 'context-signals', workspace: 'ctx-full', setup: sidecarNewer, env: env() },
   { id: 'signals-native-ios', verb: 'context-signals', workspace: 'ctx-native-ios', env: env() },
   { id: 'signals-terminal', verb: 'context-signals', workspace: 'ctx-terminal', env: env() },
+  { id: 'signals-terminal-go-layout', verb: 'context-signals', workspace: 'ctx-terminal-go', env: env() },
   { id: 'signals-critique-legacy-keys', verb: 'context-signals', workspace: 'ctx-empty', setup: (ws) => write(ws, '.impeccable/critique/2026-02-02T02-02-02Z__x.md', '---\nscore: "88"\np0: 0\np1: 2\ntimestamp: "2026-02-02T02:02:02.000Z"\nslug: x\n---\nbody\n'), env: env() },
   { id: 'signals-critique-blank-keys', verb: 'context-signals', workspace: 'ctx-empty', setup: (ws) => write(ws, '.impeccable/critique/2026-02-02T02-02-02Z__x.md', '---\ntotal_score: n/a\nslug: x\n---\nbody\n'), env: env() },
   { id: 'signals-git-clean-main', verb: 'context-signals', workspace: 'ctx-signals', setup: gitInit, env: env() },

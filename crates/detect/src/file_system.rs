@@ -38,7 +38,9 @@ pub const HTML_EXTENSIONS: &[&str] = &[".html", ".htm"];
 pub use impeccable_core::checks::terminal::TERMINAL_EXTENSIONS;
 /// Skipped only on a terminal project: Rust build output, Python virtualenvs,
 /// Go vendored modules. Web walks keep `SKIP_DIRS` byte-identical; the
-/// `detect-config` oracle workspace proves `ignoreFiles` on `src/vendor`.
+/// `detect-config` oracle workspace proves `ignoreFiles` on `src/vendor`. A
+/// non-hidden virtualenv (any name) is caught separately by `is_virtualenv_dir`,
+/// which checks for a `pyvenv.cfg` file rather than matching a fixed name.
 pub const TERMINAL_SKIP_DIRS: &[&str] = &["target", ".venv", "vendor"];
 
 /// JS: file-system.mjs#hasScannableExtension
@@ -115,12 +117,23 @@ pub fn walk_dir_reporting_for(
         }
         let full = jsp::join(&[dir, &name]);
         if is_dir {
+            if platform == Some("terminal") && is_virtualenv_dir(&full) {
+                continue;
+            }
             files.extend(walk_dir_reporting_for(&full, platform, on_read_error));
         } else if has_scannable_extension_for(&name, platform) {
             files.push(full);
         }
     }
     files
+}
+
+
+/// True when `dir` directly contains a `pyvenv.cfg` file: every PEP 405
+/// virtualenv (venv, virtualenv, uv, poetry-in-project) has one, whatever the
+/// folder is named. Checked only on terminal walks; web walks never call this.
+fn is_virtualenv_dir(dir: &str) -> bool {
+    std::path::Path::new(dir).join("pyvenv.cfg").is_file()
 }
 
 /// JS: file-system.mjs#walkDir(dir, onReadError), the web walk.

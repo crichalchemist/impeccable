@@ -58,43 +58,155 @@ const NATIVE_EVIDENCE_DEPENDENCIES: [(&str, &str, &str); 4] = [
     ("@react-native/metro-config", "adaptive", "a React Native metro config dependency"),
     ("ink", "terminal", "an ink dependency"),
 ];
-/// Text manifests whose dependency lines name a terminal stack. Each entry is
-/// (manifest file, dependency name, reason). A line matches when, after
-/// trimming whitespace and a leading quote, it starts with the name and the
-/// next character is not part of an identifier, so `richtext` is not `rich`.
-/// A leading `require ` token is skipped so go.mod's single-dependency line
-/// matches as well as the block form. A Go major-version suffix (`/v2`, `/v3`)
-/// after the module path is accepted.
-const TERMINAL_EVIDENCE_MANIFESTS: [(&str, &str, &str); 8] = [
-    ("Cargo.toml", "ratatui", "a ratatui dependency"),
-    ("Cargo.toml", "crossterm", "a crossterm dependency"),
-    ("go.mod", "github.com/charmbracelet/bubbletea", "a bubbletea dependency"),
-    ("go.mod", "github.com/charmbracelet/lipgloss", "a lipgloss dependency"),
-    ("pyproject.toml", "textual", "a textual dependency"),
-    ("pyproject.toml", "rich", "a rich dependency"),
-    ("requirements.txt", "textual", "a textual dependency"),
-    ("requirements.txt", "rich", "a rich dependency"),
+/// Text manifests at the project root whose dependency entries name a
+/// terminal stack: (manifest file, [(dependency, reason)]). Each manifest is
+/// read once and parsed by `manifest_names_dependency`. Only the root
+/// manifest is read (Tier 1 walks nothing), so Cargo member crates are not
+/// seen. `rich` and `crossterm` are absent on purpose: web backends and plain
+/// CLIs use both without a full-screen UI, so neither is evidence alone.
+const TERMINAL_EVIDENCE_MANIFESTS: [(&str, &[(&str, &str)]); 4] = [
+    ("Cargo.toml", &[("ratatui", "a ratatui dependency")]),
+    (
+        "go.mod",
+        &[
+            ("bubbletea", "a bubbletea dependency"),
+            ("lipgloss", "a lipgloss dependency"),
+            ("bubbles", "a bubbles dependency"),
+        ],
+    ),
+    ("pyproject.toml", &[("textual", "a textual dependency")]),
+    ("requirements.txt", &[("textual", "a textual dependency")]),
 ];
 
-fn manifest_names_dependency(text: &str, name: &str) -> bool {
-    text.lines().any(|line| {
-        let t = line.trim_start().trim_start_matches(|c| c == '"' || c == '\'');
-        let t = t.strip_prefix("require ").map(str::trim_start).unwrap_or(t);
-        if !t.starts_with(name) {
+/// True when `manifest`'s text names the dependency `name`.
+fn manifest_names_dependency(manifest: &str, text: &str, name: &str) -> bool {
+    match manifest {
+        "go.mod" => go_mod_requires(text, name),
+        "Cargo.toml" => cargo_names_dependency(text, name),
+        _ => python_names_dependency(text, name),
+    }
+}
+
+/// Charm modules live under both hosts: v1 under GitHub, v2 under the
+/// `charm.land` vanity path (`charm.land/bubbletea/v2`).
+const CHARM_MODULE_HOSTS: [&str; 2] = ["github.com/charmbracelet/", "charm.land/"];
+
+/// go.mod: true when a `require` entry names the Charm module `name`. A
+/// single-line `require <path> <version>` and the lines of a `require (` block
+/// count. Nothing inside another block (`replace (`, `exclude (`, `retract (`,
+/// `tool (`, `godebug (`) counts, and an `// indirect` entry does not.
+fn go_mod_requires(text: &str, name: &str) -> bool {
+    // None outside a block; Some(true) inside `require (`; Some(false) inside any other block.
+    let mut block: Option<bool> = None;
+    for line in text.lines() {
+        let t = line.trim();
+        if let Some(in_require) = block {
+            if t.starts_with(')') {
+                block = None;
+            } else if in_require && go_entry_names(t, name) {
+                return true;
+            }
+            continue;
+        }
+        let verb_end = t.find(|c: char| c.is_whitespace() || c == '(').unwrap_or(t.len());
+        let (verb, rest) = (&t[..verb_end], t[verb_end..].trim_start());
+        if rest.starts_with('(') {
+            block = Some(verb == "require");
+        } else if verb == "require" && go_entry_names(rest, name) {
+            return true;
+        }
+    }
+    false
+}
+
+/// One require entry, `<module path> <version> [// comment]`: it names `name`
+/// when the path is `<host><name>` or `<host><name>/v<digits>` for a Charm
+/// host and the comment does not mark it indirect (`indirect`, or
+/// `indirect;` followed by more, as `golang.org/x/mod/modfile` reads it).
+fn go_entry_names(entry: &str, name: &str) -> bool {
+    if let Some(i) = entry.find("//") {
+        let comment = entry[i + 2..].trim();
+        if comment == "indirect" || comment.starts_with("indirect;") {
             return false;
         }
-        let rest = &t[name.len()..];
-        // Go's import-versioning rule appends `/vN` to every v2+ module path,
-        // so `github.com/charmbracelet/bubbletea/v2` is still bubbletea.
-        let rest = match rest.strip_prefix("/v") {
-            Some(after) if after.starts_with(|c: char| c.is_ascii_digit()) => {
-                after.trim_start_matches(|c: char| c.is_ascii_digit())
+    }
+    let path = entry.split_whitespace().next().unwrap_or("").trim_matches('"');
+    CHARM_MODULE_HOSTS.iter().any(|host| match path.strip_prefix(host).and_then(|p| p.strip_prefix(name)) {
+        Some("") => true,
+        Some(rest) => rest
+            .strip_prefix("/v")
+            .map_or(false, |digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())),
+        None => false,
+    })
+}
+
+/// pyproject.toml and requirements.txt: after stripping a `#` comment, the
+/// line itself (a requirements line, or a Poetry `textual = "^0.80"` key) and
+/// every quoted string on it (a PEP 621 array such as
+/// `dependencies = ["Textual>=0.80", "rich"]`) are read as requirements.
+fn python_names_dependency(text: &str, name: &str) -> bool {
+    text.lines().any(|line| {
+        let line = line.split('#').next().unwrap_or("");
+        python_requirement_names(line, name)
+            || line.split(['"', '\'']).skip(1).step_by(2).any(|s| python_requirement_names(s, name))
+    })
+}
+
+/// A requirement names the package `name` (already normalized) when its
+/// leading name run, PEP 503 normalized, equals it and what follows is a
+/// requirement tail: nothing, extras `[`, a version `( < > = ! ~`, a marker
+/// `;`, or a URL `@`. `=` also admits a Poetry key. Prose such as
+/// "Textual app for notes" fails the tail check. Accepted residuals:
+/// `keywords = ["textual"]` and a project named `textual` still match.
+fn python_requirement_names(spec: &str, name: &str) -> bool {
+    let spec = spec.trim_start();
+    if !spec.starts_with(|c: char| c.is_ascii_alphanumeric()) {
+        return false;
+    }
+    let end = spec
+        .find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')))
+        .unwrap_or(spec.len());
+    if pep503_normalize(&spec[..end]) != name {
+        return false;
+    }
+    let tail = spec[end..].trim_start();
+    tail.is_empty() || tail.starts_with(['[', '(', '<', '>', '=', '!', '~', ';', '@'])
+}
+
+/// PEP 503 name normalization: lowercase, each run of `-`, `_`, `.` becomes
+/// one `-`.
+fn pep503_normalize(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    for c in name.chars() {
+        if matches!(c, '-' | '_' | '.') {
+            if !out.ends_with('-') {
+                out.push('-');
             }
-            _ => rest,
-        };
-        match rest.chars().next() {
-            None => true,
-            Some(c) => !(c.is_alphanumeric() || c == '_' || c == '-' || c == '.' || c == '/'),
+        } else {
+            out.push(c.to_ascii_lowercase());
+        }
+    }
+    out
+}
+
+/// Cargo.toml: a key line naming the crate (`ratatui = "0.29"`,
+/// `ratatui.workspace = true`, `"ratatui" = ...`) or a table header ending in
+/// `dependencies.ratatui]` (`[dependencies.ratatui]`,
+/// `[target.'cfg(unix)'.dependencies.ratatui]`). `#` comments are ignored.
+fn cargo_names_dependency(text: &str, name: &str) -> bool {
+    let header_tail = format!("dependencies.{}]", name);
+    text.lines().any(|line| {
+        let t = line.split('#').next().unwrap_or("").trim();
+        if t.starts_with('[') {
+            return t.ends_with(&header_tail);
+        }
+        let key = t.strip_prefix('"').unwrap_or(t);
+        match key.strip_prefix(name) {
+            Some(rest) => {
+                let rest = rest.strip_prefix('"').unwrap_or(rest);
+                rest.starts_with(|c: char| c.is_whitespace() || c == '=' || c == '.')
+            }
+            None => false,
         }
     })
 }
@@ -182,12 +294,24 @@ pub fn check_native_platform_evidence(
     product: Option<&str>,
     product_path: Option<&str>,
 ) -> Vec<Finding> {
+    native_platform_evidence(project_root, platform, product, product_path).map(|(f, _)| f).into_iter().collect()
+}
+
+/// The `platform-native-evidence` finding and the platform it suggests
+/// (`terminal`, `ios`, `android`, or `adaptive`). `check_workspaces` reads the
+/// suggestion to word its own sentence.
+pub fn native_platform_evidence(
+    project_root: &str,
+    platform: Option<&str>,
+    product: Option<&str>,
+    product_path: Option<&str>,
+) -> Option<(Finding, &'static str)> {
     if project_root.is_empty() {
-        return vec![];
+        return None;
     }
     if let Some(p) = platform {
         if !p.is_empty() && p != "web" {
-            return vec![];
+            return None;
         }
     }
     let mut evidence: Vec<NativeEvidence> = Vec::new();
@@ -223,17 +347,20 @@ pub fn check_native_platform_evidence(
             }
         }
     }
-    for (manifest, name, reason) in TERMINAL_EVIDENCE_MANIFESTS {
-        if let Some(text) = safe_read(&jsp::join(&[project_root, manifest])) {
-            if manifest_names_dependency(&text, name) {
+    for (manifest, rows) in TERMINAL_EVIDENCE_MANIFESTS {
+        let Some(text) = safe_read(&jsp::join(&[project_root, manifest])) else { continue };
+        for &(name, reason) in rows {
+            // One reason per dependency even when two manifests (or two
+            // module hosts) name it.
+            if manifest_names_dependency(manifest, &text, name) && !evidence.iter().any(|e| e.reason == reason) {
                 evidence.push(NativeEvidence { platform: "terminal", reason });
             }
         }
     }
     if evidence.is_empty() {
-        return vec![];
+        return None;
     }
-    let mut platforms: Vec<&str> = Vec::new();
+    let mut platforms: Vec<&'static str> = Vec::new();
     for e in &evidence {
         if !platforms.contains(&e.platform) {
             platforms.push(e.platform);
@@ -242,8 +369,8 @@ pub fn check_native_platform_evidence(
     // Mobile evidence outranks terminal evidence: a Flutter app with a Rust
     // helper is still a mobile app. Terminal is suggested only when it is the
     // only kind of evidence present.
-    let mobile: Vec<&str> = platforms.iter().copied().filter(|p| *p != "terminal").collect();
-    let suggested = if mobile.is_empty() {
+    let mobile: Vec<&'static str> = platforms.iter().copied().filter(|p| *p != "terminal").collect();
+    let suggested: &'static str = if mobile.is_empty() {
         "terminal"
     } else if mobile.len() > 1 || mobile.contains(&"adaptive") {
         "adaptive"
@@ -263,22 +390,25 @@ pub fn check_native_platform_evidence(
     } else {
         "no PRODUCT.md declares a platform, so the project resolves to web"
     };
-    vec![finding(
-        "platform-native-evidence",
-        "PRODUCT.md",
-        product_path.map(|s| s.to_string()),
-        "mention",
-        format!(
-            "{}, but the project carries {}. {}",
-            declared,
-            evidence.iter().map(|e| e.reason).collect::<Vec<_>>().join(" and "),
-            consequence
+    Some((
+        finding(
+            "platform-native-evidence",
+            "PRODUCT.md",
+            product_path.map(|s| s.to_string()),
+            "mention",
+            format!(
+                "{}, but the project carries {}. {}",
+                declared,
+                evidence.iter().map(|e| e.reason).collect::<Vec<_>>().join(" and "),
+                consequence
+            ),
+            format!(
+                "Ask the user whether `## Platform` should be `{}`. If it should, write the value and load the matching {} reference before designing.",
+                suggested, reference
+            ),
         ),
-        format!(
-            "Ask the user whether `## Platform` should be `{}`. If it should, write the value and load the matching {} reference before designing.",
-            suggested, reference
-        ),
-    )]
+        suggested,
+    ))
 }
 
 pub fn js_truthy(v: &Value) -> bool {
@@ -591,7 +721,7 @@ pub static _UNUSED: Lazy<()> = Lazy::new(|| ());
 
 #[cfg(test)]
 mod terminal_evidence_tests {
-    use super::check_native_platform_evidence;
+    use super::{check_native_platform_evidence, pep503_normalize};
 
     fn scratch(name: &str) -> String {
         let base = std::env::temp_dir().join(format!("impeccable-terminal-evidence-{}-{}", name, std::process::id()));
@@ -633,12 +763,6 @@ mod terminal_evidence_tests {
         let f = check_native_platform_evidence(&root, None, None, None);
         assert_eq!(f.len(), 1);
         assert!(f[0].summary.contains("a textual dependency"), "{}", f[0].summary);
-
-        let root = scratch("req");
-        write(&root, "requirements.txt", "rich==13.7.0\n");
-        let f = check_native_platform_evidence(&root, None, None, None);
-        assert_eq!(f.len(), 1);
-        assert!(f[0].summary.contains("a rich dependency"), "{}", f[0].summary);
     }
 
     #[test]
@@ -683,19 +807,56 @@ mod terminal_evidence_tests {
     #[test]
     fn a_prefixed_crate_name_is_not_a_match() {
         let root = scratch("prefix");
-        write(&root, "Cargo.toml", "[dependencies]\nrichtext = \"1\"\ncrossterm-winapi = \"0.9\"\n");
-        write(&root, "requirements.txt", "richtext==1.0\ntextual-dev==1.0\n");
+        write(&root, "Cargo.toml", "[dependencies]\nratatui-macros = \"0.6\"\nratatuix = \"1\"\n");
+        write(&root, "requirements.txt", "textual-dev==1.0\ntextualize==1.0\n");
         let f = check_native_platform_evidence(&root, Some("web"), Some(WEB_PRODUCT), Some("PRODUCT.md"));
         assert!(f.is_empty(), "{:?}", f.iter().map(|x| &x.summary).collect::<Vec<_>>());
     }
 
     #[test]
-    fn go_major_version_module_path_counts_as_evidence() {
+    fn go_major_version_path_counts_and_an_indirect_require_does_not() {
         let root = scratch("go-v2");
         write(&root, "go.mod", "module example.com/app\n\ngo 1.22\n\nrequire (\n\tgithub.com/charmbracelet/bubbletea/v2 v2.0.0\n\tgithub.com/charmbracelet/lipgloss/v2 v2.0.0 // indirect\n)\n");
         let f = check_native_platform_evidence(&root, None, Some("# P\n"), Some("PRODUCT.md"));
         assert_eq!(f.len(), 1);
-        assert!(f[0].summary.contains("a bubbletea dependency and a lipgloss dependency"), "{}", f[0].summary);
+        assert!(f[0].summary.contains("carries a bubbletea dependency."), "{}", f[0].summary);
+        assert!(!f[0].summary.contains("lipgloss"), "{}", f[0].summary);
+    }
+
+    #[test]
+    fn go_mod_blocks_other_than_require_do_not_count() {
+        let root = scratch("go-blocks");
+        write(
+            &root,
+            "go.mod",
+            "module example.com/app\n\ngo 1.24\n\nreplace (\n\tgithub.com/charmbracelet/bubbletea => ../fork\n)\n\nexclude (\n\tgithub.com/charmbracelet/lipgloss v0.9.0\n)\n\nretract (\n\tv1.0.1\n)\n\ntool (\n\tcharm.land/bubbles/v2/cmd/demo\n)\n\nrequire github.com/charmbracelet/bubbletea v1.2.0 // indirect\n",
+        );
+        let f = check_native_platform_evidence(&root, None, Some("# P\n"), Some("PRODUCT.md"));
+        assert!(f.is_empty(), "{:?}", f.iter().map(|x| &x.summary).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn charm_land_module_paths_and_bubbles_count_as_evidence() {
+        let root = scratch("charm-land");
+        write(&root, "go.mod", "module example.com/app\n\ngo 1.24\n\nrequire (\n\tcharm.land/bubbletea/v2 v2.0.0\n\tcharm.land/bubbles/v2 v2.0.0\n)\n");
+        let f = check_native_platform_evidence(&root, None, Some("# P\n"), Some("PRODUCT.md"));
+        assert_eq!(f.len(), 1);
+        assert!(f[0].summary.contains("a bubbletea dependency and a bubbles dependency"), "{}", f[0].summary);
+
+        let root = scratch("bubbles-v1");
+        write(&root, "go.mod", "module example.com/app\n\ngo 1.22\n\nrequire github.com/charmbracelet/bubbles v0.20.0\n");
+        let f = check_native_platform_evidence(&root, None, Some("# P\n"), Some("PRODUCT.md"));
+        assert_eq!(f.len(), 1);
+        assert!(f[0].summary.contains("a bubbles dependency"), "{}", f[0].summary);
+    }
+
+    #[test]
+    fn a_module_on_both_charm_hosts_is_listed_once() {
+        let root = scratch("both-hosts");
+        write(&root, "go.mod", "module example.com/app\n\ngo 1.24\n\nrequire (\n\tgithub.com/charmbracelet/bubbletea v1.3.0\n\tcharm.land/bubbletea/v2 v2.0.0\n)\n");
+        let f = check_native_platform_evidence(&root, None, Some("# P\n"), Some("PRODUCT.md"));
+        assert_eq!(f.len(), 1);
+        assert_eq!(f[0].summary.matches("a bubbletea dependency").count(), 1, "{}", f[0].summary);
     }
 
     #[test]
@@ -725,5 +886,109 @@ mod terminal_evidence_tests {
         let f = check_native_platform_evidence(&root, Some("web"), Some(WEB_PRODUCT), Some("PRODUCT.md"));
         assert_eq!(f.len(), 1);
         assert!(f[0].fix.contains("matching terminal reference"), "{}", f[0].fix);
+    }
+
+    #[test]
+    fn rich_alone_is_not_terminal_evidence() {
+        let root = scratch("rich-req");
+        write(&root, "requirements.txt", "rich==13.7.0\n");
+        let f = check_native_platform_evidence(&root, None, None, None);
+        assert!(f.is_empty(), "{:?}", f.iter().map(|x| &x.summary).collect::<Vec<_>>());
+
+        let root = scratch("rich-pyproject");
+        write(&root, "pyproject.toml", "[project]\ndependencies = [\n  \"rich>=13\",\n]\n");
+        let f = check_native_platform_evidence(&root, None, None, None);
+        assert!(f.is_empty(), "{:?}", f.iter().map(|x| &x.summary).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn crossterm_alone_is_not_terminal_evidence() {
+        let root = scratch("crossterm");
+        write(&root, "Cargo.toml", "[dependencies]\ncrossterm = \"0.28\"\n");
+        let f = check_native_platform_evidence(&root, Some("web"), Some(WEB_PRODUCT), Some("PRODUCT.md"));
+        assert!(f.is_empty(), "{:?}", f.iter().map(|x| &x.summary).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn a_reason_found_in_two_manifests_is_listed_once() {
+        let root = scratch("textual-twice");
+        write(&root, "pyproject.toml", "[project]\ndependencies = [\n  \"textual>=0.80\",\n]\n");
+        write(&root, "requirements.txt", "textual==0.80.0\n");
+        let f = check_native_platform_evidence(&root, None, None, None);
+        assert_eq!(f.len(), 1);
+        assert_eq!(f[0].summary.matches("a textual dependency").count(), 1, "{}", f[0].summary);
+    }
+
+    #[test]
+    fn pep503_folds_case_and_separator_runs() {
+        assert_eq!(pep503_normalize("Textual"), "textual");
+        assert_eq!(pep503_normalize("Textual__Dev.-Tools"), "textual-dev-tools");
+    }
+
+    #[test]
+    fn pyproject_inline_array_and_capitalized_names_count() {
+        let root = scratch("py-inline");
+        write(&root, "pyproject.toml", "[project]\nname = \"notes\"\ndependencies = [\"Textual>=0.80\", \"rich\"]\n");
+        let f = check_native_platform_evidence(&root, None, None, None);
+        assert_eq!(f.len(), 1);
+        assert!(f[0].summary.contains("carries a textual dependency."), "{}", f[0].summary);
+
+        let root = scratch("req-extras");
+        write(&root, "requirements.txt", "-r base.txt\nTextual[syntax] >= 0.80 ; python_version >= \"3.9\"\n");
+        let f = check_native_platform_evidence(&root, None, None, None);
+        assert_eq!(f.len(), 1);
+        assert!(f[0].summary.contains("a textual dependency"), "{}", f[0].summary);
+    }
+
+    #[test]
+    fn poetry_key_form_still_counts() {
+        let root = scratch("poetry");
+        write(&root, "pyproject.toml", "[tool.poetry.dependencies]\npython = \"^3.11\"\nTextual = \"^0.80\"\n");
+        let f = check_native_platform_evidence(&root, None, None, None);
+        assert_eq!(f.len(), 1);
+        assert!(f[0].summary.contains("a textual dependency"), "{}", f[0].summary);
+    }
+
+    #[test]
+    fn prose_and_comments_naming_textual_are_not_dependencies() {
+        let root = scratch("py-prose");
+        write(
+            &root,
+            "pyproject.toml",
+            "[project]\nname = \"notes\"\ndescription = \"Textual app for managing notes\"\ndependencies = [\"httpx>=0.27\"]  # textual>=0.80 later\n",
+        );
+        write(&root, "requirements.txt", "# textual==0.80.0\nhttpx==0.27.0\n");
+        let f = check_native_platform_evidence(&root, None, None, None);
+        assert!(f.is_empty(), "{:?}", f.iter().map(|x| &x.summary).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn cargo_dotted_keys_and_dependency_headers_count() {
+        let bodies = [
+            "[dependencies]\nratatui.workspace = true\n",
+            "[dependencies]\nratatui.version = \"0.29\"\n",
+            "[dependencies.ratatui]\nversion = \"0.29\"\n",
+            "[target.'cfg(unix)'.dependencies.ratatui]\nversion = \"0.29\"\n",
+            "[workspace.dependencies]\n\"ratatui\" = \"0.29\" # tui\n",
+        ];
+        for (i, body) in bodies.iter().enumerate() {
+            let root = scratch(&format!("cargo-form-{i}"));
+            write(&root, "Cargo.toml", body);
+            let f = check_native_platform_evidence(&root, Some("web"), Some(WEB_PRODUCT), Some("PRODUCT.md"));
+            assert_eq!(f.len(), 1, "{body}");
+            assert!(f[0].summary.contains("a ratatui dependency"), "{body}: {}", f[0].summary);
+        }
+    }
+
+    #[test]
+    fn ratatui_named_only_in_package_metadata_is_not_a_dependency() {
+        let root = scratch("cargo-metadata");
+        write(
+            &root,
+            "Cargo.toml",
+            "[package]\nname = \"ratatui-notes\"\ndescription = \"ratatui demo\"\nkeywords = [\"ratatui\"]\n\n[dependencies]\ncrossterm = \"0.28\"\n",
+        );
+        let f = check_native_platform_evidence(&root, Some("web"), Some(WEB_PRODUCT), Some("PRODUCT.md"));
+        assert!(f.is_empty(), "{:?}", f.iter().map(|x| &x.summary).collect::<Vec<_>>());
     }
 }

@@ -58,7 +58,7 @@ The spec uses a closed set of terms so later plans can be checked against it.
 
 ### Hook mode at boot
 
-`automaticHookMode` returns `none` for `ios`, `android`, and `adaptive`, which also emits `MANUAL_DETECTOR_REQUIRED`. `terminal` is not added to that set. On a terminal project the hook stays active and the manual-detector directive reads as it does on web.
+`automaticHookMode` returns `none` for `ios`, `android`, and `adaptive`, which also emits `MANUAL_DETECTOR_REQUIRED`. `terminal` is not added to that set. On a terminal project the hook stays active. When no hook is installed, the manual-detector directive says "terminal UI" and points the detector at its source (PR 6).
 
 ### Doctor evidence
 
@@ -450,12 +450,17 @@ Tests: `tests/skill-reference.test.mjs` pins the Compact row, the live guard, an
 | `tui-rt-no-key-hints` on tables and pager prompts | PR 4, item 7 |
 | `MANUAL_DETECTOR_REQUIRED` says "web UI" on terminal (found while planning) | PR 6 |
 | Four runtime rules unmeasured on real programs | Left out: needs a manual pass after PR 4 |
+| A PyPA flat package (`mypkg/__init__.py` beside `pyproject.toml`, no root `.py`) still routes to no scan target | Left out |
+| A Cargo virtual workspace with only `crates/` routes to no scan target | Left out |
+| `setup.hasCode` is false for Go and Python projects, so routing's `document` hint stays off there | Left out |
+| A renamed Cargo dependency (`tui = { package = "ratatui", ... }`) is not evidence | Left out |
+| A virtualenv committed to git reaches detect through the git-changes path | Left out |
 
 ### Delivery gates
 
 - **PR 4:** `cargo test --workspace`; `cargo xtask bundle` and `cargo xtask bundle --check`; the new and re-recorded goldens reviewed by hand; `bun run build`; `bun run test`; `node --test tests/tmux-engine.test.mjs` with tmux installed; one manual `--tmux` pass over `less` and a 40-column frame of the ratatui demo, recording the collapse-narrow count against PR 3's 15.
 - **PR 5:** `cargo test --workspace`; `cargo xtask bundle` and `--check`; the re-recorded goldens; `bun run build`; `bun run test`.
-- **PR 6:** `cargo test --workspace`; the two new oracle cases and the re-recorded doctor goldens; `bun run test`.
+- **PR 6:** `cargo test --workspace`; the three new oracle cases, the re-recorded `context-terminal` golden, and the doctor goldens replaying unchanged; `bun run test`.
 - **PR 7:** `bun run build`; `bun run test`; one `bun run test:skill-behavior` run against the baseline.
 
 PRs 4, 5, and 6 change engine behavior and add to the `ENGINE_VERSION` bump already owed at release. PR 7 changes skill content, which the skill version bump at release covers. None of the four bumps a manifest or adds a changelog entry.
