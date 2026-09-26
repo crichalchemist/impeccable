@@ -69,8 +69,9 @@ const TERMINAL_EVIDENCE_MANIFESTS: [(&str, &[(&str, &str)]); 4] = [
     (
         "go.mod",
         &[
-            ("github.com/charmbracelet/bubbletea", "a bubbletea dependency"),
-            ("github.com/charmbracelet/lipgloss", "a lipgloss dependency"),
+            ("bubbletea", "a bubbletea dependency"),
+            ("lipgloss", "a lipgloss dependency"),
+            ("bubbles", "a bubbles dependency"),
         ],
     ),
     ("pyproject.toml", &[("textual", "a textual dependency")]),
@@ -78,8 +79,64 @@ const TERMINAL_EVIDENCE_MANIFESTS: [(&str, &[(&str, &str)]); 4] = [
 ];
 
 /// True when `manifest`'s text names the dependency `name`.
-fn manifest_names_dependency(_manifest: &str, text: &str, name: &str) -> bool {
-    line_names_dependency(text, name)
+fn manifest_names_dependency(manifest: &str, text: &str, name: &str) -> bool {
+    match manifest {
+        "go.mod" => go_mod_requires(text, name),
+        _ => line_names_dependency(text, name),
+    }
+}
+
+/// Charm modules live under both hosts: v1 under GitHub, v2 under the
+/// `charm.land` vanity path (`charm.land/bubbletea/v2`).
+const CHARM_MODULE_HOSTS: [&str; 2] = ["github.com/charmbracelet/", "charm.land/"];
+
+/// go.mod: true when a `require` entry names the Charm module `name`. A
+/// single-line `require <path> <version>` and the lines of a `require (` block
+/// count. Nothing inside another block (`replace (`, `exclude (`, `retract (`,
+/// `tool (`, `godebug (`) counts, and an `// indirect` entry does not.
+fn go_mod_requires(text: &str, name: &str) -> bool {
+    // None outside a block; Some(true) inside `require (`; Some(false) inside any other block.
+    let mut block: Option<bool> = None;
+    for line in text.lines() {
+        let t = line.trim();
+        if let Some(in_require) = block {
+            if t.starts_with(')') {
+                block = None;
+            } else if in_require && go_entry_names(t, name) {
+                return true;
+            }
+            continue;
+        }
+        let verb_end = t.find(|c: char| c.is_whitespace() || c == '(').unwrap_or(t.len());
+        let (verb, rest) = (&t[..verb_end], t[verb_end..].trim_start());
+        if rest.starts_with('(') {
+            block = Some(verb == "require");
+        } else if verb == "require" && go_entry_names(rest, name) {
+            return true;
+        }
+    }
+    false
+}
+
+/// One require entry, `<module path> <version> [// comment]`: it names `name`
+/// when the path is `<host><name>` or `<host><name>/v<digits>` for a Charm
+/// host and the comment does not mark it indirect (`indirect`, or
+/// `indirect;` followed by more, as `golang.org/x/mod/modfile` reads it).
+fn go_entry_names(entry: &str, name: &str) -> bool {
+    if let Some(i) = entry.find("//") {
+        let comment = entry[i + 2..].trim();
+        if comment == "indirect" || comment.starts_with("indirect;") {
+            return false;
+        }
+    }
+    let path = entry.split_whitespace().next().unwrap_or("").trim_matches('"');
+    CHARM_MODULE_HOSTS.iter().any(|host| match path.strip_prefix(host).and_then(|p| p.strip_prefix(name)) {
+        Some("") => true,
+        Some(rest) => rest
+            .strip_prefix("/v")
+            .map_or(false, |digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())),
+        None => false,
+    })
 }
 
 /// The PR 1 line-prefix scanner. Tasks 3 to 5 of the PR 6 plan replace it
@@ -693,12 +750,49 @@ mod terminal_evidence_tests {
     }
 
     #[test]
-    fn go_major_version_module_path_counts_as_evidence() {
+    fn go_major_version_path_counts_and_an_indirect_require_does_not() {
         let root = scratch("go-v2");
         write(&root, "go.mod", "module example.com/app\n\ngo 1.22\n\nrequire (\n\tgithub.com/charmbracelet/bubbletea/v2 v2.0.0\n\tgithub.com/charmbracelet/lipgloss/v2 v2.0.0 // indirect\n)\n");
         let f = check_native_platform_evidence(&root, None, Some("# P\n"), Some("PRODUCT.md"));
         assert_eq!(f.len(), 1);
-        assert!(f[0].summary.contains("a bubbletea dependency and a lipgloss dependency"), "{}", f[0].summary);
+        assert!(f[0].summary.contains("carries a bubbletea dependency."), "{}", f[0].summary);
+        assert!(!f[0].summary.contains("lipgloss"), "{}", f[0].summary);
+    }
+
+    #[test]
+    fn go_mod_blocks_other_than_require_do_not_count() {
+        let root = scratch("go-blocks");
+        write(
+            &root,
+            "go.mod",
+            "module example.com/app\n\ngo 1.24\n\nreplace (\n\tgithub.com/charmbracelet/bubbletea => ../fork\n)\n\nexclude (\n\tgithub.com/charmbracelet/lipgloss v0.9.0\n)\n\nretract (\n\tv1.0.1\n)\n\ntool (\n\tcharm.land/bubbles/v2/cmd/demo\n)\n\nrequire github.com/charmbracelet/bubbletea v1.2.0 // indirect\n",
+        );
+        let f = check_native_platform_evidence(&root, None, Some("# P\n"), Some("PRODUCT.md"));
+        assert!(f.is_empty(), "{:?}", f.iter().map(|x| &x.summary).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn charm_land_module_paths_and_bubbles_count_as_evidence() {
+        let root = scratch("charm-land");
+        write(&root, "go.mod", "module example.com/app\n\ngo 1.24\n\nrequire (\n\tcharm.land/bubbletea/v2 v2.0.0\n\tcharm.land/bubbles/v2 v2.0.0\n)\n");
+        let f = check_native_platform_evidence(&root, None, Some("# P\n"), Some("PRODUCT.md"));
+        assert_eq!(f.len(), 1);
+        assert!(f[0].summary.contains("a bubbletea dependency and a bubbles dependency"), "{}", f[0].summary);
+
+        let root = scratch("bubbles-v1");
+        write(&root, "go.mod", "module example.com/app\n\ngo 1.22\n\nrequire github.com/charmbracelet/bubbles v0.20.0\n");
+        let f = check_native_platform_evidence(&root, None, Some("# P\n"), Some("PRODUCT.md"));
+        assert_eq!(f.len(), 1);
+        assert!(f[0].summary.contains("a bubbles dependency"), "{}", f[0].summary);
+    }
+
+    #[test]
+    fn a_module_on_both_charm_hosts_is_listed_once() {
+        let root = scratch("both-hosts");
+        write(&root, "go.mod", "module example.com/app\n\ngo 1.24\n\nrequire (\n\tgithub.com/charmbracelet/bubbletea v1.3.0\n\tcharm.land/bubbletea/v2 v2.0.0\n)\n");
+        let f = check_native_platform_evidence(&root, None, Some("# P\n"), Some("PRODUCT.md"));
+        assert_eq!(f.len(), 1);
+        assert_eq!(f[0].summary.matches("a bubbletea dependency").count(), 1, "{}", f[0].summary);
     }
 
     #[test]
