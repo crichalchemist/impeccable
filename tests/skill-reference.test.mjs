@@ -183,5 +183,11 @@ describe('skill reference authoring contracts', () => {
 
     const generate = readFileSync(join(ROOT, 'skill/reference/generate.md'), 'utf-8');
     assert.match(generate, /on `ios` \/ `android` \/ `adaptive` \/ `terminal` projects, decline this command/);
+
+    // live.md carries the same guard as generate.md, near the top so it is
+    // read before the setup steps.
+    const liveHead = readFileSync(join(ROOT, 'skill/reference/live.md'), 'utf-8').replace(/\r\n?/g, '\n').split('\n').slice(0, 5).join('\n');
+    assert.match(liveHead, /\*\*Web only\.\*\* Live mode's browser overlay has no native or terminal equivalent/);
+    assert.match(liveHead, /on `ios` \/ `android` \/ `adaptive` \/ `terminal` projects, decline this command/);
   });
 });
