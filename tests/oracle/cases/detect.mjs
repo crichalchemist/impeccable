@@ -64,7 +64,7 @@ export default function cases() {
   out.push(
     { id: 'detect-terminal-gate-web', verb: 'detect', args: ['--no-config', '--json', TERMINAL], isolateHome: false },
     { id: 'detect-terminal-text-all', verb: 'detect', args: ['--no-config', '--platform', 'terminal', TERMINAL], isolateHome: false },
-    { id: 'detect-terminal-single-file-advisory', verb: 'detect', args: ['--no-config', '--json', '--platform', 'terminal', `${TERMINAL}/tui-spinner-no-tty-guard/tui-spinner-no-tty-guard.py`], isolateHome: false },
+    { id: 'detect-terminal-single-file-advisory', verb: 'detect', args: ['--no-config', '--json', '--platform', 'terminal', `${TERMINAL}/tui-spinner-no-tty-guard/tui-spinner-no-tty-guard.go`], isolateHome: false },
     // An explicit terminal-extension file on a web project still gets the
     // web pipeline: the extension gate applies to the walker, not to a file
     // argument.

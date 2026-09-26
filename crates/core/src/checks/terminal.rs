@@ -380,8 +380,51 @@ const EMOJI_FILE_THRESHOLD: usize = 8;
 const CANONICAL_EMOJI_THRESHOLD: usize = 3;
 const CANONICAL_EMOJI: &[char] = &['🚀', '✅', '❌', '⚠', '✨', '🎉', '📦', '🔧', '🔥', '💡'];
 
-fn is_emoji(c: char) -> bool {
-    matches!(c, '\u{1F300}'..='\u{1FAFF}' | '\u{2600}'..='\u{27BF}')
+/// U+2600 to U+27BF codepoints with the Unicode Emoji_Presentation property
+/// (emoji-data.txt, Unicode 16.0.0; the subset is unchanged in 17.0.0).
+/// The rest of that range (✓ ✗ ★ ☐ ➜) is a one-cell text glyph by default.
+fn has_emoji_presentation(c: char) -> bool {
+    matches!(
+        c,
+        '\u{2614}'..='\u{2615}'
+            | '\u{2648}'..='\u{2653}'
+            | '\u{267F}'
+            | '\u{2693}'
+            | '\u{26A1}'
+            | '\u{26AA}'..='\u{26AB}'
+            | '\u{26BD}'..='\u{26BE}'
+            | '\u{26C4}'..='\u{26C5}'
+            | '\u{26CE}'
+            | '\u{26D4}'
+            | '\u{26EA}'
+            | '\u{26F2}'..='\u{26F3}'
+            | '\u{26F5}'
+            | '\u{26FA}'
+            | '\u{26FD}'
+            | '\u{2705}'
+            | '\u{270A}'..='\u{270B}'
+            | '\u{2728}'
+            | '\u{274C}'
+            | '\u{274E}'
+            | '\u{2753}'..='\u{2755}'
+            | '\u{2757}'
+            | '\u{2795}'..='\u{2797}'
+            | '\u{27B0}'
+            | '\u{27BF}'
+    )
+}
+
+/// Spec section 7, PR 5: U+1F300 to U+1FAFF always count. A codepoint in
+/// U+2600 to U+27BF counts only with default emoji presentation, a following
+/// U+FE0F, or membership in the canonical set.
+fn counts_as_emoji(c: char, next: Option<char>) -> bool {
+    match c {
+        '\u{1F300}'..='\u{1FAFF}' => true,
+        '\u{2600}'..='\u{27BF}' => {
+            has_emoji_presentation(c) || next == Some('\u{FE0F}') || CANONICAL_EMOJI.contains(&c)
+        }
+        _ => false,
+    }
 }
 
 fn scan_terminal_emoji_density(lines: &[&str], file_path: &str) -> Vec<Finding> {
@@ -389,7 +432,11 @@ fn scan_terminal_emoji_density(lines: &[&str], file_path: &str) -> Vec<Finding> 
     let mut canonical = 0usize;
     let mut first: Option<usize> = None;
     for (i, l) in lines.iter().enumerate() {
-        for c in l.chars().filter(|c| is_emoji(*c)) {
+        let chars: Vec<char> = l.chars().collect();
+        for (k, &c) in chars.iter().enumerate() {
+            if !counts_as_emoji(c, chars.get(k + 1).copied()) {
+                continue;
+            }
             total += 1;
             if CANONICAL_EMOJI.contains(&c) {
                 canonical += 1;
@@ -423,7 +470,7 @@ fn scan_terminal_double_border(lines: &[&str], file_path: &str) -> Vec<Finding> 
 // ─── tui-hardcoded-rgb-no-adapt ─────────────────────────────────────────────
 re!(
     RGB_RE,
-    r##"Color::Rgb\((?:[ \t]*(?:0x[0-9a-fA-F]+|\d+)[ \t]*,){2}[ \t]*(?:0x[0-9a-fA-F]+|\d+)[ \t]*\)|Color::from_u32\(0x|lipgloss\.Color\("#|chalk\.hex\(|\bcolor=["']#|\[#[0-9a-fA-F]{6}\]|\\x1b\[38;2;|\\033\[38;2;|\x1b\[38;2;"##
+    r##"Color::Rgb\((?:[ \t]*(?:0x[0-9a-fA-F]+|\d+)[ \t]*,){2}[ \t]*(?:0x[0-9a-fA-F]+|\d+)[ \t]*\)|Color::from_u32\(0x|lipgloss\.Color\("#|\bchalk(?:\.[A-Za-z]+)*\.(?:hex|bgHex)\([ \t]*["']#|\bchalk(?:\.[A-Za-z]+)*\.(?:rgb|bgRgb)\([ \t]*\d|\bcolor=["']#|\[#[0-9a-fA-F]{6}\]|\\x1b\[38;2;|\\033\[38;2;|\x1b\[38;2;"##
 );
 /// The note `tui-hardcoded-rgb-no-adapt` carries when the project does have
 /// an adaptive color helper somewhere: the literal may still be themed.
@@ -456,7 +503,10 @@ fn scan_terminal_hardcoded_rgb(
 }
 
 // ─── tui-spinner-no-tty-guard ───────────────────────────────────────────────
-re!(SPINNER_RE, r"ink-spinner|\bora\(|rich\.spinner|bubbles/(?:v\d+/)?spinner|briandowns/spinner");
+// Only Bubbles' spinner: ora, Rich, briandowns/spinner, and Ink's renderer
+// all stop animating off a TTY on their own. Matches the github.com and the
+// charm.land v2 module paths.
+re!(SPINNER_RE, r"bubbles/(?:v\d+/)?spinner");
 
 fn scan_terminal_spinner(lines: &[&str], file_path: &str, signals: Option<&ProjectSignals>) -> Vec<Finding> {
     if matches!(signals, Some(s) if s.has_tty_guard) {
@@ -483,6 +533,52 @@ re!(SIZE_24_RE, r"(?i)\b(?:height|rows|lines)[ \t]*[:=][ \t]*24\b");
 re!(SIZE_CALL_RE, r"\.Width\(80\)|width=\{80\}|size=\(80,[ \t]*24\)");
 re!(CONSTRAINT_LENGTH_RE, r"Constraint::Length\(");
 re!(CONSTRAINT_FLEX_RE, r"Constraint::(?:Min|Max|Percentage|Ratio|Fill)\(");
+// Spec section 7, PR 5 (a): a file that measures the terminal holds its 80
+// or 24 as the fallback for when the measurement fails.
+re!(
+    MEASURES_TERMINAL_RE,
+    r"GetSize\(|terminal::size\(|terminal_size\(|get_terminal_size\(|stdout\.columns|stdout\.rows|console\.(?:width|size)\b"
+);
+// (c): in a file that uses ratatui's canvas, a literal Rect is a drawing
+// coordinate, not the terminal.
+re!(CANVAS_RE, r"widgets::canvas\b");
+re!(SIZE_LITERAL_RE, r"\b(?:80|24)\b");
+re!(LAYOUT_CALL_RE, r"Layout::(?:vertical|horizontal|new)\(|\.constraints\(");
+
+/// The byte span of each layout call's argument list, from the opener's `(`
+/// to just past its matching `)`, or to the end of the text when the call is
+/// unbalanced. Only parens are counted; comments are already blanked and a
+/// paren inside a string literal is not special-cased. An opener that starts
+/// inside an earlier span belongs to that call.
+fn layout_call_spans(text: &str) -> Vec<(usize, usize)> {
+    let bytes = text.as_bytes();
+    let mut spans = Vec::new();
+    let mut covered = 0usize;
+    for m in LAYOUT_CALL_RE.find_iter(text) {
+        if m.start() < covered {
+            continue;
+        }
+        let open = m.end() - 1; // every alternative ends on the `(`
+        let mut depth = 0usize;
+        let mut end = text.len();
+        for (k, &b) in bytes.iter().enumerate().skip(open) {
+            match b {
+                b'(' => depth += 1,
+                b')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = k + 1;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        covered = end;
+        spans.push((open, end));
+    }
+    spans
+}
 
 /// Test code pins sizes on purpose (spec: "outside paths containing test").
 /// Only the file name and its parent directory are consulted, so a fixture
@@ -505,21 +601,31 @@ fn scan_terminal_hardcoded_size(lines: &[&str], file_path: &str) -> Vec<Finding>
     if in_test_path(file_path) {
         return Vec::new();
     }
+    let text = lines.join("\n");
+    let measures = MEASURES_TERMINAL_RE.is_match(&text);
+    let canvas = CANVAS_RE.is_match(&text);
     let mut out: Vec<Finding> = lines
         .iter()
         .enumerate()
         .filter(|(_, l)| {
-            RECT_LITERAL_RE.is_match(l) || SIZE_80_RE.is_match(l) || SIZE_24_RE.is_match(l) || SIZE_CALL_RE.is_match(l)
+            let rect = RECT_LITERAL_RE
+                .find(l)
+                .is_some_and(|m| !canvas && !(measures && SIZE_LITERAL_RE.is_match(m.as_str())));
+            let literal =
+                !measures && (SIZE_80_RE.is_match(l) || SIZE_24_RE.is_match(l) || SIZE_CALL_RE.is_match(l));
+            rect || literal
         })
         .map(|(i, _)| hit("tui-hardcoded-size", file_path, lines, i))
         .collect();
-    let lengths: Vec<usize> = lines
-        .iter()
-        .enumerate()
-        .flat_map(|(i, l)| CONSTRAINT_LENGTH_RE.find_iter(l).map(move |_| i))
-        .collect();
-    if lengths.len() >= 2 && !lines.iter().any(|l| CONSTRAINT_FLEX_RE.is_match(l)) {
-        out.push(with_count(hit("tui-hardcoded-size", file_path, lines, lengths[0]), "lengthConstraints", lengths.len()));
+    // (b) Constraints are counted per layout call, so the two Lengths of a
+    // centered box or two one-Length layouts are not an all-Length layout.
+    for (start, end) in layout_call_spans(&text) {
+        let call = &text[start..end];
+        let lengths: Vec<usize> = CONSTRAINT_LENGTH_RE.find_iter(call).map(|m| start + m.start()).collect();
+        if lengths.len() >= 2 && !CONSTRAINT_FLEX_RE.is_match(call) {
+            let line = text[..lengths[0]].matches('\n').count();
+            out.push(with_count(hit("tui-hardcoded-size", file_path, lines, line), "lengthConstraints", lengths.len()));
+        }
     }
     out.sort_by(|a, b| a.line.partial_cmp(&b.line).unwrap_or(std::cmp::Ordering::Equal));
     out
@@ -588,87 +694,24 @@ fn scan_terminal_nerd_glyph(lines: &[&str], file_path: &str, signals: Option<&Pr
 }
 
 // ─── tui-print-in-loop ──────────────────────────────────────────────────────
-re!(
-    TEXTUAL_CLASS_RE,
-    r"^[ \t]*class[ \t]+\w+\([^)]*\b(?:App|Widget|Screen|ModalScreen|Static|Container)\b"
-);
-re!(PY_DEF_RE, r"^[ \t]*(?:async[ \t]+)?def[ \t]+\w+");
-re!(PY_PRINT_RE, r"(?:^|[^.\w])print\(");
 re!(INK_CONSOLE_LOG_RE, r"\bconsole\.log\(");
 re!(PATCH_CONSOLE_OFF_RE, r"\bpatchConsole[ \t]*:[ \t]*false\b");
 
-fn indent_of(line: &str) -> usize {
-    line.chars().take_while(|c| *c == ' ' || *c == '\t').count()
-}
-
+/// Ink only. Textual captures `print` while an app runs (Textualize/textual#2952,
+/// `App._print`), so a Python file is never reported.
 fn scan_terminal_print_in_loop(lines: &[&str], file_path: &str, stack: Stack) -> Vec<Finding> {
-    match stack {
-        Stack::Ink => {
-            // Ink defaults to `patchConsole: true`, which captures console
-            // output and re-renders it above the frame. Only a file that
-            // turns that off can corrupt the frame with `console.log`.
-            if !lines.iter().any(|l| PATCH_CONSOLE_OFF_RE.is_match(l)) {
-                return Vec::new();
-            }
-            lines
-                .iter()
-                .enumerate()
-                .filter(|(_, l)| INK_CONSOLE_LOG_RE.is_match(l))
-                .map(|(i, _)| hit("tui-print-in-loop", file_path, lines, i))
-                .collect()
-        }
-        Stack::Textual => {
-            let n = lines.len();
-            let mut out = Vec::new();
-            let mut i = 0;
-            while i < n {
-                if !TEXTUAL_CLASS_RE.is_match(lines[i]) {
-                    i += 1;
-                    continue;
-                }
-                let class_indent = indent_of(lines[i]);
-                i += 1;
-                let mut method_indent: Option<usize> = None;
-                let mut in_worker = false;
-                while i < n {
-                    let l = lines[i];
-                    let blank = l.trim().is_empty();
-                    if !blank && indent_of(l) <= class_indent {
-                        break;
-                    }
-                    if PY_DEF_RE.is_match(l) {
-                        let def_indent = indent_of(l);
-                        // A def no deeper than the current method is a new method; a
-                        // deeper one is a nested function and leaves the enclosing
-                        // method's indent/worker status unchanged.
-                        let is_new_method = method_indent.map(|m| def_indent <= m).unwrap_or(true);
-                        if is_new_method {
-                            method_indent = Some(def_indent);
-                            // Decorators sit directly above the def; `@work` marks a worker.
-                            in_worker = false;
-                            let mut k = i;
-                            while k > 0 && lines[k - 1].trim_start().starts_with('@') {
-                                k -= 1;
-                                let d = lines[k].trim_start();
-                                if d == "@work" || d.starts_with("@work(") || d.starts_with("@work.") {
-                                    in_worker = true;
-                                }
-                            }
-                        }
-                    } else if !blank
-                        && !in_worker
-                        && method_indent.map(|m| indent_of(l) > m).unwrap_or(false)
-                        && PY_PRINT_RE.is_match(l)
-                    {
-                        out.push(hit("tui-print-in-loop", file_path, lines, i));
-                    }
-                    i += 1;
-                }
-            }
-            out
-        }
-        Stack::Ratatui | Stack::Charm | Stack::TextualCss => Vec::new(),
+    // Ink defaults to `patchConsole: true`, which captures console output and
+    // re-renders it above the frame. Only a file that turns that off can
+    // corrupt the frame with `console.log`.
+    if stack != Stack::Ink || !lines.iter().any(|l| PATCH_CONSOLE_OFF_RE.is_match(l)) {
+        return Vec::new();
     }
+    lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| INK_CONSOLE_LOG_RE.is_match(l))
+        .map(|(i, _)| hit("tui-print-in-loop", file_path, lines, i))
+        .collect()
 }
 
 /// Run every terminal rule over one file. `source` is the file text with
@@ -879,6 +922,36 @@ mod tests {
     }
 
     #[test]
+    fn text_presentation_dingbats_do_not_count_as_emoji() {
+        // Eight glyphs from U+2600 to U+27BF without Emoji_Presentation:
+        // ordinary one-cell TUI marks, not emoji.
+        let marks = "let m = [\"✓\", \"✗\", \"★\", \"☐\", \"➜\", \"☆\", \"✔\", \"✘\"];\n";
+        assert!(scan(marks, Stack::Ratatui, Some(&ALL)).is_empty());
+        // Four with Emoji_Presentation, and four made emoji by U+FE0F.
+        let shown = "let m = [\"☔\", \"☕\", \"⚡\", \"⛔\", \"❤\u{FE0F}\", \"☀\u{FE0F}\", \"✔\u{FE0F}\", \"✓\u{FE0F}\"];\n";
+        let f = scan(shown, Stack::Ratatui, Some(&ALL));
+        assert_eq!(ids(&f), vec!["tui-emoji-density"]);
+        assert_eq!(f[0].extras.get("emojiCount"), Some(&Value::from(8u64)));
+    }
+
+    #[test]
+    fn canonical_warning_sign_counts_without_a_variation_selector() {
+        // ⚠ (U+26A0) lacks Emoji_Presentation but is in the canonical set.
+        let src = "print(\"⚠ retry\")\nprint(\"✅ done\")\nprint(\"❌ failed\")\n";
+        assert_eq!(ids(&scan(src, Stack::Textual, Some(&ALL))), vec!["tui-emoji-density"]);
+    }
+
+    #[test]
+    fn eight_emoji_reach_the_threshold_and_seven_do_not() {
+        let seven = "let s = \"🌀 🌁 🌂 🌃 🌄 🌅 🌆\";\n";
+        assert!(scan(seven, Stack::Ratatui, Some(&ALL)).is_empty());
+        let eight = "let s = \"🌀 🌁 🌂 🌃 🌄 🌅 🌆 🌇\";\n";
+        let f = scan(eight, Stack::Ratatui, Some(&ALL));
+        assert_eq!(ids(&f), vec!["tui-emoji-density"]);
+        assert_eq!(f[0].extras.get("emojiCount"), Some(&Value::from(8u64)));
+    }
+
+    #[test]
     fn double_border_is_flagged_and_single_border_passes() {
         for (src, stack) in [
             ("Block::default().border_type(BorderType::Double)", Stack::Ratatui),
@@ -915,12 +988,50 @@ mod tests {
     }
 
     #[test]
+    fn chalk_is_flagged_only_for_a_literal_color() {
+        for src in [
+            "chalk.hex('#ff00aa')('x')",
+            "chalk.bold.hex(\"#ff00aa\")('x')",
+            "chalk.bgHex('#101010')('x')",
+            "chalk.rgb(255, 0, 170)('x')",
+            "chalk.underline.bgRgb(16, 16, 16)('x')",
+        ] {
+            assert_eq!(ids(&scan(src, Stack::Ink, Some(&NONE))), vec!["tui-hardcoded-rgb-no-adapt"], "{src}");
+        }
+        for src in [
+            "chalk.hex(theme.primary)('x')",
+            "chalk.bgHex(color)('x')",
+            "chalk.rgb(r, g, b)('x')",
+            "chalk.hex(`#${hex}`)('x')",
+        ] {
+            assert!(scan(src, Stack::Ink, Some(&NONE)).is_empty(), "a computed argument is not a hardcoded color: {src}");
+        }
+    }
+
+    #[test]
     fn spinner_without_tty_guard_is_flagged_and_a_guard_silences_it() {
-        let src = "import Spinner from 'ink-spinner';\n";
-        assert_eq!(ids(&scan(src, Stack::Ink, Some(&NONE))), vec!["tui-spinner-no-tty-guard"]);
-        assert!(scan(src, Stack::Ink, Some(&ALL)).is_empty());
+        let src = "import \"github.com/charmbracelet/bubbles/spinner\"\n";
+        assert_eq!(ids(&scan(src, Stack::Charm, Some(&NONE))), vec!["tui-spinner-no-tty-guard"]);
+        assert!(scan(src, Stack::Charm, Some(&ALL)).is_empty());
         assert!(scan("s := spinner.New()\n", Stack::Charm, Some(&NONE)).is_empty(), "the import path is what counts");
-        assert_eq!(ids(&scan("import \"github.com/charmbracelet/bubbles/spinner\"\n", Stack::Charm, Some(&NONE))), vec!["tui-spinner-no-tty-guard"]);
+        let v2 = "import \"github.com/charmbracelet/bubbles/v2/spinner\"\n";
+        assert_eq!(ids(&scan(v2, Stack::Charm, Some(&NONE))), vec!["tui-spinner-no-tty-guard"]);
+    }
+
+    #[test]
+    fn self_guarding_spinner_libraries_are_not_flagged() {
+        // Each of these stops animating when output is not a terminal:
+        // ora (isEnabled), Rich (Live refreshes only on a terminal console),
+        // briandowns/spinner (Start is a no-op off a terminal), and Ink's
+        // renderer (non-interactive in CI or without a TTY).
+        for (src, stack) in [
+            ("import Spinner from 'ink-spinner';\n", Stack::Ink),
+            ("const s = ora('Loading').start();\n", Stack::Ink),
+            ("from rich.spinner import Spinner\n", Stack::Textual),
+            ("import \"github.com/briandowns/spinner\"\n", Stack::Charm),
+        ] {
+            assert!(scan(src, stack, Some(&NONE)).is_empty(), "{src}");
+        }
     }
 
     #[test]
@@ -955,6 +1066,78 @@ mod tests {
     }
 
     #[test]
+    fn one_length_per_layout_call_is_not_an_all_length_layout() {
+        let src = "let top = Layout::vertical([Constraint::Length(1)]);\nlet side = Layout::horizontal([Constraint::Length(20)]);\n";
+        assert!(scan(src, Stack::Ratatui, Some(&ALL)).is_empty());
+        // The manual-pass false positive: two Lengths that size a centered box.
+        let centered = "let r = area.centered(Constraint::Length(w), Constraint::Length(h));\n";
+        assert!(scan(centered, Stack::Ratatui, Some(&ALL)).is_empty());
+    }
+
+    #[test]
+    fn a_rigid_layout_fires_even_when_another_call_is_flexible() {
+        let src = "let a = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]);\nlet b = Layout::default()\n    .direction(Direction::Horizontal)\n    .constraints([\n        Constraint::Length(10),\n        Constraint::Length(30),\n    ])\n    .split(area);\n";
+        let f = scan(src, Stack::Ratatui, Some(&ALL));
+        assert_eq!(ids(&f), vec!["tui-hardcoded-size"]);
+        assert_eq!(f[0].line, 5.0);
+        assert_eq!(f[0].extras.get("lengthConstraints"), Some(&Value::from(2u64)));
+    }
+
+    #[test]
+    fn every_layout_opener_is_walked_to_its_close_paren() {
+        let new = "let l = Layout::new(Direction::Vertical, [Constraint::Length(1), Constraint::Length(2)]);\n";
+        assert_eq!(ids(&scan(new, Stack::Ratatui, Some(&ALL))), vec!["tui-hardcoded-size"]);
+        // A nested .constraints( inside a Layout call is the same call, reported once.
+        let nested = "let l = Layout::new(d, base.constraints([Constraint::Length(1), Constraint::Length(2)]));\n";
+        assert_eq!(ids(&scan(nested, Stack::Ratatui, Some(&ALL))), vec!["tui-hardcoded-size"]);
+        // An unclosed call runs to the end of the file.
+        let open = "let l = Layout::vertical([\n    Constraint::Length(1),\n    Constraint::Length(2),\n";
+        let f = scan(open, Stack::Ratatui, Some(&ALL));
+        assert_eq!(ids(&f), vec!["tui-hardcoded-size"]);
+        assert_eq!(f[0].line, 2.0);
+    }
+
+    #[test]
+    fn a_rigid_layout_call_still_fires_in_a_file_that_measures_the_terminal() {
+        // Exemption (a) silences a bare 80/24 literal, not the Length count.
+        let src = "let (cols, _) = crossterm::terminal::size().unwrap_or((80, 24));\nlet l = Layout::vertical([Constraint::Length(3), Constraint::Length(10)]);\n";
+        let f = scan(src, Stack::Ratatui, Some(&ALL));
+        assert_eq!(ids(&f), vec!["tui-hardcoded-size"]);
+        assert_eq!(f[0].extras.get("lengthConstraints"), Some(&Value::from(2u64)));
+    }
+
+    #[test]
+    fn a_fallback_size_in_a_file_that_measures_the_terminal_is_not_flagged() {
+        // glow's idiom: the literal is what the program uses when GetSize fails.
+        let go = "w, _, err := term.GetSize(int(os.Stdout.Fd()))\nif err != nil {\n\twidth = 80\n}\nmsg := tea.WindowSizeMsg{Width: 80, Height: 24}\n";
+        assert!(scan_terminal_source(go, "main.go", Stack::Charm, Some(&ALL)).is_empty());
+        let rs = "let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));\nlet fallback = Rect::new(0, 0, 80, 24);\nlet width = 80;\n";
+        assert!(scan(rs, Stack::Ratatui, Some(&ALL)).is_empty());
+        let py = "cols = shutil.get_terminal_size().columns\nsize=(80, 24)\n";
+        assert!(scan(py, Stack::Textual, Some(&ALL)).is_empty());
+        let rich = "if console.width < 100:\n    columns = 80\n";
+        assert!(scan(rich, Stack::Textual, Some(&ALL)).is_empty());
+        let ink = "const cols = process.stdout.columns ?? 80;\nexport const A = () => <Box width={80} />;\n";
+        assert!(scan(ink, Stack::Ink, Some(&ALL)).is_empty());
+        // A rectangle that is not an 80x24 fallback still fires in a measuring file.
+        let other = "let (c, r) = crossterm::terminal::size()?;\nlet r = Rect::new(10, 10, 200, 100);\n";
+        assert_eq!(ids(&scan(other, Stack::Ratatui, Some(&ALL))), vec!["tui-hardcoded-size"]);
+        // A measurement that is commented out exempts nothing: the scan sees blanked text.
+        let blanked = strip_c_comments("// let (w, h) = crossterm::terminal::size()?;\nlet width = 80;\n");
+        assert_eq!(ids(&scan(&blanked, Stack::Ratatui, Some(&ALL))), vec!["tui-hardcoded-size"]);
+        // The canonical case neither measures nor draws on a canvas.
+        assert_eq!(ids(&scan("fn area() -> Rect { Rect::new(0, 0, 80, 24) }\n", Stack::Ratatui, Some(&ALL))), vec!["tui-hardcoded-size"]);
+    }
+
+    #[test]
+    fn a_literal_rect_in_a_canvas_file_is_a_drawing_coordinate() {
+        let src = "use ratatui::widgets::canvas::{Canvas, Rectangle};\nlet r = Rect::new(10, 10, 200, 100);\nlet width = 80;\n";
+        let f = scan(src, Stack::Ratatui, Some(&ALL));
+        assert_eq!(ids(&f), vec!["tui-hardcoded-size"], "the canvas exemption covers Rect::new only");
+        assert_eq!(f[0].line, 3.0);
+    }
+
+    #[test]
     fn truncation_before_an_ellipsis_is_flagged_without_a_width_library() {
         for (src, stack) in [
             ("let short = format!(\"{}...\", &title[..20]);\n", Stack::Ratatui),
@@ -980,11 +1163,11 @@ mod tests {
     }
 
     #[test]
-    fn print_inside_a_textual_widget_is_flagged_but_workers_and_module_level_pass() {
-        let src = "from textual.app import App\nprint(\"module level is fine\")\n\nclass Demo(App):\n    def on_mount(self) -> None:\n        print(\"corrupts the frame\")\n        self.log(\"fine\")\n\n    @work(thread=True)\n    def fetch(self) -> None:\n        print(\"worker output is allowed\")\n\ndef helper():\n    print(\"outside the class\")\n";
-        let f = scan(src, Stack::Textual, Some(&ALL));
-        assert_eq!(ids(&f), vec!["tui-print-in-loop"]);
-        assert_eq!(f[0].line, 6.0);
+    fn print_in_a_textual_app_is_not_flagged_because_textual_captures_it() {
+        // Textual routes `print` to devtools or nowhere while an app runs
+        // (Textualize/textual#2952, `App._print`), so it cannot corrupt the frame.
+        let src = "from textual.app import App\nprint(\"module level\")\n\nclass Demo(App):\n    def on_mount(self) -> None:\n        print(\"captured by Textual\")\n\n    @network_retry\n    def fetch(self) -> None:\n        def inner() -> None:\n            print(\"nested\")\n        print(\"outer\")\n";
+        assert!(scan(src, Stack::Textual, Some(&ALL)).is_empty());
     }
 
     #[test]
@@ -1001,8 +1184,9 @@ mod tests {
 
     #[test]
     fn single_file_scan_downgrades_absence_rules() {
-        let src = "import Spinner from 'ink-spinner';\nconst c = <Text color=\"#ff0080\">{title.slice(0, 8) + '...'}</Text>;\nconst i = \"\u{e0a0}\";\n";
-        let f = scan(src, Stack::Ink, None);
+        let src = "const c = <Text color=\"#ff0080\">{title.slice(0, 8) + '...'}</Text>;\nconst i = \"\u{e0a0}\";\n";
+        let mut f = scan(src, Stack::Ink, None);
+        f.extend(scan("import \"github.com/charmbracelet/bubbles/spinner\"\n", Stack::Charm, None));
         let noted: Vec<&str> = f.iter().filter(|f| f.extras.get("note") == Some(&Value::String(SIGNALS_NOTE.into()))).map(|f| f.antipattern.as_str()).collect();
         for id in ["tui-spinner-no-tty-guard", "tui-hardcoded-rgb-no-adapt", "tui-grapheme-unsafe-truncate", "tui-nerd-glyph-no-fallback"] {
             assert!(noted.contains(&id), "{id} should carry the note: {f:?}");
@@ -1010,23 +1194,6 @@ mod tests {
         for f in &f {
             assert_eq!(f.severity, "advisory", "{}", f.antipattern);
         }
-    }
-
-    #[test]
-    fn non_worker_decorator_does_not_exempt_print() {
-        let src = "from textual.app import App\n\nclass Demo(App):\n    @network_retry\n    def on_mount(self) -> None:\n        print(\"x\")\n";
-        let f = scan(src, Stack::Textual, Some(&ALL));
-        assert_eq!(ids(&f), vec!["tui-print-in-loop"]);
-        assert_eq!(f[0].line, 6.0);
-    }
-
-    #[test]
-    fn print_after_a_nested_helper_is_still_flagged() {
-        let src = "from textual.app import App\n\nclass Demo(App):\n    def on_mount(self) -> None:\n        def inner() -> None:\n            print(\"nested\")\n        print(\"outer\")\n";
-        let f = scan(src, Stack::Textual, Some(&ALL));
-        assert_eq!(ids(&f), vec!["tui-print-in-loop", "tui-print-in-loop"]);
-        let lines: Vec<f64> = f.iter().map(|f| f.line).collect();
-        assert_eq!(lines, vec![6.0, 7.0]);
     }
 
     #[test]

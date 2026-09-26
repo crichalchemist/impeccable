@@ -497,6 +497,13 @@ Recorded from the PR 4 final review. Neither is fixed in PR 4.
 - The width-drift test (overflow no larger than the row's count of two-cell glyphs) also passes for wrapped CJK or emoji prose: a joined row of n two-cell glyphs overflows by 2n minus the pane width, which is at most n whenever n is at most the pane width, so a CJK sentence the terminal wrapped once reads as width drift. A follow-up could also require a vertical border glyph at the row's end.
 - `tui-rt-no-key-hints`'s first-row exemption reuses the whole key-hint pattern, including bracketed and angle-bracketed tokens and a bare `?`, so a log viewer whose first row starts `[INFO]`, or any first row containing `?`, silences the rule. The rule is advisory, so this is a false negative only.
 
+## Known gaps after PR 5
+
+Recorded from the PR 5 final review; neither is fixed in PR 5.
+
+- `tui-hardcoded-size`'s canvas exemption matches the literal `widgets::canvas`, so a grouped import such as `use ratatui::widgets::{canvas::Canvas, Block}` does not exempt the file. A missed exemption leaves the rule firing as it did before PR 5.
+- Counting `Constraint::Length` per layout call found four new findings in the ratatui examples (color-explorer, demo, inline), all fixed-height sub-layouts. They match the rule as specified, but fixed-height sub-layouts are common in ratatui, so they count against promoting the rule out of `advisory`.
+
 ## Appendix A: research report
 
 The sourced research this spec distills is `docs/superpowers/research/2026-09-24-terminal-design-research.md` (72 sources). Its distillation section is the origin of `terminal.md`'s bullets and the rule table.

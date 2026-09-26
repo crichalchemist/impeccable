@@ -827,7 +827,7 @@ pub static ANTIPATTERNS: &[Antipattern] = &[
         severity: Some("advisory"),
         platforms: Some(&["terminal"]),
         name: "Console output inside a TUI render loop",
-        description: "print or console.log inside a running full-screen app corrupts the frame. Log to a file or use the framework's log or patchConsole facility.",
+        description: "`console.log` in an Ink app that sets `patchConsole: false` writes over the rendered frame. Leave `patchConsole` on, or log to a file.",
         skill_section: None,
         skill_guideline: None,
     },
@@ -1331,5 +1331,14 @@ mod tests {
         assert_eq!(get_antipattern("tui-rt-nested-borders").unwrap().category, "slop");
         assert_eq!(get_antipattern("tui-rt-low-contrast").unwrap().category, "quality");
         assert_eq!(ANTIPATTERNS.len(), 79);
+    }
+
+    #[test]
+    fn print_in_loop_description_names_only_ink() {
+        let row = ANTIPATTERNS.iter().find(|a| a.id == "tui-print-in-loop").expect("row");
+        assert_eq!(
+            row.description,
+            "`console.log` in an Ink app that sets `patchConsole: false` writes over the rendered frame. Leave `patchConsole` on, or log to a file."
+        );
     }
 }
