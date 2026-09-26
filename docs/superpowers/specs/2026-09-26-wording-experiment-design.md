@@ -27,7 +27,7 @@ Three branches off one fork `main` commit:
 |---|---|---|
 | original | `wording-arm-original` | unchanged |
 | nvc | `wording-arm-nvc` | every prohibition or judgment becomes observation, visitor need, request |
-| paraphrase | `wording-arm-paraphrase` | the same sentences rewritten to a comparable degree, prohibitive framing kept |
+| paraphrase | `wording-arm-paraphrase` | the same sentences rewritten to a comparable degree; every prohibition kept, only judgmental labels (slop, lazy, and similar) neutralized, as in the example below |
 
 The paraphrase arm separates the effect of tone from the effect of rewriting at all.
 
@@ -39,7 +39,7 @@ Example of one rule in each arm:
 
 ### Stage 1 scope
 
-`skill/SKILL.src.md` (the shared design laws section only), `skill/reference/craft-floor.md`, `skill/reference/critique.md`, `skill/reference/audit.md`, `skill/agents/impeccable-finish-reviewer.md`. These carry about 145 of the 426 charged-word matches in `skill/`, and they are the text that shapes builds, critique and audit reports, and the reviewer's voice. `new-work.md` and `live.md` stay untouched in stage 1 so a routing change can be traced to a file.
+`skill/SKILL.src.md` (the preamble and the `## How to design` section only; Setup, Modes and Commands stay frozen), `skill/reference/craft-floor.md`, `skill/reference/critique.md`, `skill/reference/audit.md`, `skill/agents/impeccable-finish-reviewer.md`. These carry about 145 of the 426 charged-word matches in `skill/`, and they are the text that shapes builds, critique and audit reports, and the reviewer's voice. `new-work.md` and `live.md` stay untouched in stage 1 so a routing change can be traced to a file.
 
 ### Rewrite invariants
 
@@ -56,7 +56,7 @@ The rewrites are drafted by Claude and reviewed by a separate reviewer that chec
 
 ### Lane 1: compliance
 
-`bun run test:skill-behavior` (78 scenarios) in each arm's worktree, on `gpt-5.6-terra` (OpenAI), `anthropic/claude-sonnet-5` and `google/gemini-3.7-flash` (OpenRouter). Prerequisite: the OpenRouter provider in `tests/skill-behavior/providers.mjs` is committed to the fork's `main` first, so no arm needs a file overlay.
+The skill-behavior scenarios (`node --test` on each arm worktree's `tests/skill-behavior/scenarios.test.mjs`, one model per sweep, 78 cases per sweep over the three models) on `gpt-5.6-terra` (OpenAI), `anthropic/claude-sonnet-5` and `google/gemini-3.7-flash` (OpenRouter). Prerequisite: the OpenRouter provider in `tests/skill-behavior/providers.mjs` is committed to the fork's `main` first, so no arm needs a file overlay.
 
 Metric: passes per arm. A regression is a scenario red in an arm, green in `original` for the same model, and red again on one rerun.
 
@@ -79,7 +79,7 @@ A blinded pairwise judge compares same-brief, same-model outputs across arms, ea
 
 ### Judge
 
-`google/gemini-3.7-flash` or a stronger Gemini tier if available through OpenRouter: a family that generates nothing in lanes 2 and 3. Outputs carry random ids; the judge never sees an arm name.
+`google/gemini-3.7-flash` through OpenRouter, pinned for the whole run: a family that generates nothing in lanes 2 and 3. Outputs carry random ids; the judge never sees an arm name.
 
 ## Decision rule (fixed before any billed run)
 
@@ -127,11 +127,11 @@ About $35 for stage 1, hard cap $40:
 
 | Lane | Estimate |
 |---|---|
-| Compliance, 3 arms x 78 scenarios x 3 models | about $12 |
+| Compliance, 3 arms, one full sweep each (78 cases over 3 models) | about $12 |
 | Tone, 60 runs plus judging | about $7 |
 | Builds, 72 runs plus 144 judged comparisons | about $16 |
 
-Estimates come from the 2026-09-24 and 2026-09-25 sweeps ("a few dollars" per 78-scenario sweep); `cost.mjs` reports actuals.
+The compliance estimate comes from the 2026-09-24 and 2026-09-25 sweeps; lanes 2 and 3 are unmeasured, so every lane and the judge run a small pilot first, and projection gates (compliance $15, total $38.5) stop the run and hand the owner options if the pilots project past budget. `cost.mjs` reports actuals.
 
 ## Outputs
 
