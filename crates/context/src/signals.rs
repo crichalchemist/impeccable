@@ -4,8 +4,9 @@ use crate::context::{extract_platform, load_context};
 use crate::critique_storage::{js_number, read_latest_snapshot_across_targets};
 use crate::jsp;
 use crate::target_args::TargetOptions;
-use crate::util::{exists, js_num, js_trim, json_pretty, opt_string, Env};
+use crate::util::{exists, js_num, js_trim, json_pretty, opt_string, read_dir_entries, Env};
 use impeccable_common::Io;
+use impeccable_core::checks::terminal::TERMINAL_EXTENSIONS;
 use serde_json::{Map, Value};
 use std::process::{Command, Stdio};
 
@@ -264,6 +265,21 @@ fn dev_server_signals() -> Value {
 
 const SCANNABLE_EXT: [&str; 11] = [".html", ".htm", ".css", ".scss", ".jsx", ".tsx", ".js", ".ts", ".vue", ".svelte", ".astro"];
 const SOURCE_DIRS: [&str; 5] = ["src", "app", "components", "pages", "public"];
+/// Go's conventional layout directories, read only on a terminal project.
+const TERMINAL_SOURCE_DIRS: [&str; 3] = ["cmd", "internal", "pkg"];
+/// Root manifests that mark a terminal project whose sources may sit at the root.
+const TERMINAL_ROOT_MANIFESTS: [&str; 3] = ["Cargo.toml", "go.mod", "pyproject.toml"];
+
+/// A terminal project whose root holds its manifest beside source files
+/// (`main.go` next to `go.mod`, `app.py` next to `pyproject.toml`). One
+/// directory listing, no recursion.
+fn terminal_root_holds_source(cwd: &str) -> bool {
+    TERMINAL_ROOT_MANIFESTS.iter().any(|m| exists(&jsp::join(&[cwd, m])))
+        && read_dir_entries(cwd)
+            .unwrap_or_default()
+            .iter()
+            .any(|e| e.is_file && TERMINAL_EXTENSIONS.contains(&jsp::extname(&e.name).to_lowercase().as_str()))
+}
 
 fn is_vendored_path(rel: &str) -> bool {
     let segs: Vec<&str> = rel.split(|c| c == '/' || c == '\\').collect();
@@ -277,7 +293,14 @@ fn is_vendored_path(rel: &str) -> bool {
     })
 }
 
-fn scan_targets(cwd: &str, git: &Value) -> Value {
+fn scan_targets(cwd: &str, git: &Value, platform: Option<&str>) -> Value {
+    // A terminal project also scans terminal source, may keep its sources at
+    // the root, and may use Go's cmd/internal/pkg layout.
+    let terminal = platform == Some("terminal");
+    let scannable = |f: &str| {
+        let ext = jsp::extname(f).to_lowercase();
+        SCANNABLE_EXT.contains(&ext.as_str()) || (terminal && TERMINAL_EXTENSIONS.contains(&ext.as_str()))
+    };
     let is_repo = git.get("isRepo").and_then(|v| v.as_bool()).unwrap_or(false);
     let changed: Vec<String> = git
         .get("changedFiles")
@@ -288,7 +311,7 @@ fn scan_targets(cwd: &str, git: &Value) -> Value {
     if is_repo && !changed.is_empty() {
         let c: Vec<String> = changed
             .into_iter()
-            .filter(|f| SCANNABLE_EXT.contains(&jsp::extname(f).to_lowercase().as_str()))
+            .filter(|f| scannable(f.as_str()))
             .filter(|f| !is_vendored_path(f))
             .filter(|f| exists(&jsp::join(&[cwd, f])))
             .collect();
@@ -298,7 +321,15 @@ fn scan_targets(cwd: &str, git: &Value) -> Value {
             return Value::Object(m);
         }
     }
-    let dirs: Vec<&str> = SOURCE_DIRS.iter().copied().filter(|d| exists(&jsp::join(&[cwd, d]))).collect();
+    // Before the source dirs: `.` covers them, and a go.mod with main.go at
+    // the root and an internal/ dir would otherwise lose main.go.
+    if terminal && terminal_root_holds_source(cwd) {
+        m.insert("targets".into(), Value::Array(vec![Value::String(".".into())]));
+        m.insert("via".into(), Value::String("root".into()));
+        return Value::Object(m);
+    }
+    let extra_dirs: &[&str] = if terminal { &TERMINAL_SOURCE_DIRS } else { &[] };
+    let dirs: Vec<&str> = SOURCE_DIRS.iter().chain(extra_dirs).copied().filter(|d| exists(&jsp::join(&[cwd, d]))).collect();
     if !dirs.is_empty() {
         m.insert("targets".into(), Value::Array(dirs.into_iter().map(|d| Value::String(d.to_string())).collect()));
         m.insert("via".into(), Value::String("source-dir".into()));
@@ -328,11 +359,12 @@ pub fn gather_signals(cwd: &str, env: &Env) -> Value {
     setup.insert("hasDesign".into(), Value::Bool(ctx.has_design));
     setup.insert("designPath".into(), opt_string(&ctx.design_path));
     setup.insert("hasCode".into(), Value::Bool(has_code(cwd)));
-    setup.insert("platform".into(), opt_string(&extract_platform(ctx.product.as_deref())));
+    let platform = extract_platform(ctx.product.as_deref());
+    setup.insert("platform".into(), opt_string(&platform));
     let mut critique = Map::new();
     critique.insert("latest".into(), latest_critique(cwd, env));
     let dev = dev_server_signals();
-    let scan = scan_targets(cwd, &git);
+    let scan = scan_targets(cwd, &git, platform.as_deref());
     let mut m = Map::new();
     m.insert("setup".into(), Value::Object(setup));
     m.insert("critique".into(), Value::Object(critique));
@@ -348,4 +380,111 @@ pub fn run(_args: &[String], io: &mut Io) -> i32 {
     let v = gather_signals(&cwd, &env);
     io.out(&format!("{}\n", json_pretty(&v)));
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::scan_targets;
+    use serde_json::{json, Value};
+
+    fn scratch(name: &str) -> String {
+        let base = std::env::temp_dir().join(format!("impeccable-scan-targets-{}-{}", name, std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        base.to_string_lossy().into_owned()
+    }
+
+    fn write(root: &str, rel: &str, body: &str) {
+        let p = std::path::Path::new(root).join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, body).unwrap();
+    }
+
+    fn no_git() -> Value {
+        json!({ "isRepo": false, "changedFiles": [] })
+    }
+
+    fn targets_and_via(scan: &Value) -> (Vec<String>, Value) {
+        let targets = scan["targets"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
+        (targets, scan["via"].clone())
+    }
+
+    #[test]
+    fn go_cmd_layout_on_a_terminal_project_targets_its_source_dirs() {
+        let root = scratch("go-cmd");
+        write(&root, "go.mod", "module example.com/app\n\ngo 1.24\n");
+        write(&root, "cmd/app/main.go", "package main\n");
+        write(&root, "internal/ui/view.go", "package ui\n");
+        write(&root, "pkg/style/style.go", "package style\n");
+        let (targets, via) = targets_and_via(&scan_targets(&root, &no_git(), Some("terminal")));
+        assert_eq!(targets, ["cmd", "internal", "pkg"]);
+        assert_eq!(via, "source-dir");
+    }
+
+    #[test]
+    fn go_module_with_main_beside_go_mod_targets_the_root() {
+        let root = scratch("go-root");
+        write(&root, "go.mod", "module example.com/app\n\ngo 1.24\n");
+        write(&root, "main.go", "package main\n");
+        write(&root, "internal/ui/view.go", "package ui\n");
+        let (targets, via) = targets_and_via(&scan_targets(&root, &no_git(), Some("terminal")));
+        assert_eq!(targets, ["."]);
+        assert_eq!(via, "root");
+    }
+
+    #[test]
+    fn python_module_beside_pyproject_targets_the_root() {
+        let root = scratch("py-root");
+        write(&root, "pyproject.toml", "[project]\nname = \"notes\"\n");
+        write(&root, "app.py", "from textual.app import App\n");
+        let (targets, via) = targets_and_via(&scan_targets(&root, &no_git(), Some("terminal")));
+        assert_eq!(targets, ["."]);
+        assert_eq!(via, "root");
+    }
+
+    #[test]
+    fn rust_crate_with_src_keeps_its_src_target() {
+        let root = scratch("rust-src");
+        write(&root, "Cargo.toml", "[dependencies]\nratatui = \"0.29\"\n");
+        write(&root, "src/main.rs", "fn main() {}\n");
+        let (targets, via) = targets_and_via(&scan_targets(&root, &no_git(), Some("terminal")));
+        assert_eq!(targets, ["src"]);
+        assert_eq!(via, "source-dir");
+    }
+
+    #[test]
+    fn source_files_without_a_root_manifest_do_not_target_the_root() {
+        let root = scratch("no-manifest");
+        write(&root, "main.go", "package main\n");
+        let (targets, via) = targets_and_via(&scan_targets(&root, &no_git(), Some("terminal")));
+        assert!(targets.is_empty(), "{targets:?}");
+        assert_eq!(via, Value::Null);
+    }
+
+    #[test]
+    fn web_project_ignores_terminal_layouts() {
+        let root = scratch("web-go");
+        write(&root, "go.mod", "module example.com/app\n\ngo 1.24\n");
+        write(&root, "main.go", "package main\n");
+        write(&root, "cmd/app/main.go", "package main\n");
+        for platform in [None, Some("web")] {
+            let (targets, via) = targets_and_via(&scan_targets(&root, &no_git(), platform));
+            assert!(targets.is_empty(), "{platform:?}: {targets:?}");
+            assert_eq!(via, Value::Null, "{platform:?}");
+        }
+    }
+
+    #[test]
+    fn terminal_git_changes_include_terminal_sources_and_web_changes_do_not() {
+        let root = scratch("git-changes");
+        write(&root, "src/main.rs", "fn main() {}\n");
+        write(&root, "README.md", "x\n");
+        let git = json!({ "isRepo": true, "changedFiles": ["src/main.rs", "README.md"] });
+        let (targets, via) = targets_and_via(&scan_targets(&root, &git, Some("terminal")));
+        assert_eq!(targets, ["src/main.rs"]);
+        assert_eq!(via, "git-changes");
+        let (targets, via) = targets_and_via(&scan_targets(&root, &git, None));
+        assert_eq!(targets, ["src"]);
+        assert_eq!(via, "source-dir");
+    }
 }
