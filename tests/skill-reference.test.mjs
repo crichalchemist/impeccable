@@ -137,6 +137,27 @@ describe('skill reference authoring contracts', () => {
     assert.match(adapt, /truecolor/);
   });
 
+  it('classifies every terminal width from narrow to wide with no gap', () => {
+    // The engine's narrow cutoff (NARROW_COLUMNS = 60 in crates/terminal)
+    // and the adapt table must agree, and no width between 40 and 120
+    // columns may fall outside a class.
+    const adapt = readFileSync(join(ROOT, 'skill/reference/adapt.terminal.md'), 'utf-8').replace(/\r\n?/g, '\n');
+    const terminal = readFileSync(join(ROOT, 'skill/reference/terminal.md'), 'utf-8').replace(/\r\n?/g, '\n');
+    const rows = adapt.split('\n').filter((l) => /^\| (Narrow|Compact|Standard|Wide) \|/.test(l));
+    assert.deepEqual(rows.map((l) => l.split('|')[2].trim()), [
+      'under 60 columns',
+      '60 to 79 columns',
+      '80 to 119 columns',
+      '120 columns and above',
+    ]);
+    assert.match(adapt, /At 120 columns and above, text blocks stay near 80 to 100 cells/);
+    assert.doesNotMatch(adapt, /Above 120 columns/);
+    assert.doesNotMatch(adapt, /all three classes/);
+    // The matrix probes 40 columns: every capture command passes 40x24.
+    assert.match(terminal, /80x24, 120x40, and 40 columns;/);
+    assert.doesNotMatch(terminal, /about 30 columns/);
+  });
+
   it('routes terminal projects to the terminal references and keeps detect available to them', () => {
     const skill = readFileSync(join(ROOT, 'skill/SKILL.src.md'), 'utf-8').replace(/\r\n?/g, '\n');
     const routing = readFileSync(join(ROOT, 'skill/reference/routing.md'), 'utf-8').replace(/\r\n?/g, '\n');

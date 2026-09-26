@@ -248,3 +248,15 @@ Six `detect-terminal-*` goldens were re-recorded from the binary and reviewed by
 New cases, recorded from the binary with `--bin` and reviewed by hand. `doctor-terminal-evidence-charm-v2` pins Charm v2 `charm.land` module paths as evidence, and pins that an `// indirect` require (`charm.land/bubbles/v2`) and a `replace (` block do not count; the summary lists bubbletea and lipgloss only. `doctor-monorepo-terminal-evidence` adds `apps/b/Cargo.toml` (`ratatui.workspace = true`) to `ctx-monorepo`: the workspace sweep now says the workspace "carries terminal dependencies" where it said "native build files" for every kind of evidence. `signals-terminal-go-layout` runs `signals` on the new `ctx-terminal-go` workspace (a terminal PRODUCT.md, `go.mod`, `cmd/app/main.go`, `internal/ui/view.go`, no `package.json`): `scan` reads `["cmd", "internal"]` via `source-dir`, where the binary before this change returned `[]`.
 
 No other existing golden changed. `doctor-terminal-evidence-text` and `-json` were not re-recorded: they report the root-level `platform-native-evidence` finding, whose wording this change does not touch, and their single-line `require github.com/charmbracelet/bubbletea` still counts. `signals-terminal` still reads `["src"]` via `source-dir` (`ctx-terminal` has no source file at its root), and `context-terminal-evidence-web` still reports its ratatui dependency.
+
+## Recorded 2026-09-25: terminal.md's size matrix (spec PR 7)
+
+`impeccable context` inlines `skill/reference/terminal.md` for a `terminal`
+project, so the edit to its Run the matrix bullet moved one golden.
+
+The `context-terminal` golden's matrix now reads `80x24, 120x40, and 40
+columns` where it read `80x24, 120x40, and about 30 columns`. Nothing else
+in the output changed. The golden was re-recorded, so the case passes; it is
+deliberately not written as a `` - `id` `` bullet, because `tests/oracle/run.mjs`
+(`loadAcceptedDeltas`) treats every line starting with a backticked id as an
+accepted delta and would stop reporting future differences on the case.
