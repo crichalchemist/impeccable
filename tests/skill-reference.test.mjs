@@ -200,6 +200,16 @@ describe('skill reference authoring contracts', () => {
         /the shipped device classes on a native platform; the tmux capture matrix on a terminal\)/,
         /platform guidance for a native or terminal project when applicable/,
       ],
+      'skill/reference/new-work.md': [
+        /landscape for desktop web, and a landscape frame on an 80x24 grid of monospace cells for a terminal surface/,
+        /A terminal surface is code-led too, image generation or not/,
+        /`buildPath: \{ "value": "code" \}` and no toggle/,
+        /on `terminal`, the tmux capture matrix from \[terminal\.md\]\(terminal\.md\)/,
+        /A terminal project runs it once here, hook or no hook/,
+        /`80x24\.txt`, `120x40\.txt`, and `40x24\.txt` from `tmux capture-pane -p -e -J`/,
+        /on a terminal platform \[terminal\.md\]\(terminal\.md\) plus the terminal detect findings/,
+      ],
+      'skill/reference/visualize.md': [/a landscape frame on an 80x24 grid of monospace cells for a terminal surface/],
       'skill/reference/polish.md': [
         /on `terminal`, the tmux capture matrix from \[terminal\.md\]\(terminal\.md\)'s Verifying the build section/,
         /on terminal, the 80x24, 120x40, and 40x24 captures, a live resize/,
