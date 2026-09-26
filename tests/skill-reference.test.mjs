@@ -225,6 +225,13 @@ describe('skill reference authoring contracts', () => {
         /the platform reference above is the one thing/,
         /the platform is not `terminal` \(a terminal surface always builds code-led/,
       ],
+      'skill/agents/impeccable-finish-reviewer.md': [
+        /terminal: the text captures `80x24\.txt`, `120x40\.txt`, `40x24\.txt`, `no-color\.txt`, and `piped\.txt`/,
+        /On a terminal \(`terminal`\) build the packet adds `reference\/terminal\.md` and the terminal detect findings/,
+        /terminal: the three sizes plus `no-color\.txt` and `piped\.txt`/,
+        /A terminal text capture is valid when it is not empty/,
+      ],
+      'skill/agents/impeccable-asset-producer.md': [/A terminal surface is a landscape frame drawn on an 80x24 grid of monospace cells/],
     };
     for (const [file, patterns] of Object.entries(branches)) {
       const text = read(file);
