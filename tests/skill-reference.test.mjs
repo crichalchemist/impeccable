@@ -208,6 +208,7 @@ describe('skill reference authoring contracts', () => {
         /A terminal project runs it once here, hook or no hook/,
         /`80x24\.txt`, `120x40\.txt`, and `40x24\.txt` from `tmux capture-pane -p -e -J`/,
         /on a terminal platform \[terminal\.md\]\(terminal\.md\) plus the terminal detect findings/,
+        /Without image generation, under a code-led default, or on a terminal surface, each card carries a `wireframe` schematic/,
       ],
       'skill/reference/visualize.md': [/a landscape frame on an 80x24 grid of monospace cells for a terminal surface/],
       'skill/reference/polish.md': [
