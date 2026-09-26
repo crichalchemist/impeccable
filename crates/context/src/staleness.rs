@@ -58,25 +58,33 @@ const NATIVE_EVIDENCE_DEPENDENCIES: [(&str, &str, &str); 4] = [
     ("@react-native/metro-config", "adaptive", "a React Native metro config dependency"),
     ("ink", "terminal", "an ink dependency"),
 ];
-/// Text manifests whose dependency lines name a terminal stack. Each entry is
-/// (manifest file, dependency name, reason). A line matches when, after
-/// trimming whitespace and a leading quote, it starts with the name and the
-/// next character is not part of an identifier, so `richtext` is not `rich`.
-/// A leading `require ` token is skipped so go.mod's single-dependency line
-/// matches as well as the block form. A Go major-version suffix (`/v2`, `/v3`)
-/// after the module path is accepted.
-const TERMINAL_EVIDENCE_MANIFESTS: [(&str, &str, &str); 8] = [
-    ("Cargo.toml", "ratatui", "a ratatui dependency"),
-    ("Cargo.toml", "crossterm", "a crossterm dependency"),
-    ("go.mod", "github.com/charmbracelet/bubbletea", "a bubbletea dependency"),
-    ("go.mod", "github.com/charmbracelet/lipgloss", "a lipgloss dependency"),
-    ("pyproject.toml", "textual", "a textual dependency"),
-    ("pyproject.toml", "rich", "a rich dependency"),
-    ("requirements.txt", "textual", "a textual dependency"),
-    ("requirements.txt", "rich", "a rich dependency"),
+/// Text manifests at the project root whose dependency entries name a
+/// terminal stack: (manifest file, [(dependency, reason)]). Each manifest is
+/// read once and parsed by `manifest_names_dependency`. Only the root
+/// manifest is read (Tier 1 walks nothing), so Cargo member crates are not
+/// seen. `rich` and `crossterm` are absent on purpose: web backends and plain
+/// CLIs use both without a full-screen UI, so neither is evidence alone.
+const TERMINAL_EVIDENCE_MANIFESTS: [(&str, &[(&str, &str)]); 4] = [
+    ("Cargo.toml", &[("ratatui", "a ratatui dependency")]),
+    (
+        "go.mod",
+        &[
+            ("github.com/charmbracelet/bubbletea", "a bubbletea dependency"),
+            ("github.com/charmbracelet/lipgloss", "a lipgloss dependency"),
+        ],
+    ),
+    ("pyproject.toml", &[("textual", "a textual dependency")]),
+    ("requirements.txt", &[("textual", "a textual dependency")]),
 ];
 
-fn manifest_names_dependency(text: &str, name: &str) -> bool {
+/// True when `manifest`'s text names the dependency `name`.
+fn manifest_names_dependency(_manifest: &str, text: &str, name: &str) -> bool {
+    line_names_dependency(text, name)
+}
+
+/// The PR 1 line-prefix scanner. Tasks 3 to 5 of the PR 6 plan replace it
+/// manifest by manifest; it is deleted once Cargo.toml has its own parser.
+fn line_names_dependency(text: &str, name: &str) -> bool {
     text.lines().any(|line| {
         let t = line.trim_start().trim_start_matches(|c| c == '"' || c == '\'');
         let t = t.strip_prefix("require ").map(str::trim_start).unwrap_or(t);
@@ -84,8 +92,6 @@ fn manifest_names_dependency(text: &str, name: &str) -> bool {
             return false;
         }
         let rest = &t[name.len()..];
-        // Go's import-versioning rule appends `/vN` to every v2+ module path,
-        // so `github.com/charmbracelet/bubbletea/v2` is still bubbletea.
         let rest = match rest.strip_prefix("/v") {
             Some(after) if after.starts_with(|c: char| c.is_ascii_digit()) => {
                 after.trim_start_matches(|c: char| c.is_ascii_digit())
@@ -223,9 +229,12 @@ pub fn check_native_platform_evidence(
             }
         }
     }
-    for (manifest, name, reason) in TERMINAL_EVIDENCE_MANIFESTS {
-        if let Some(text) = safe_read(&jsp::join(&[project_root, manifest])) {
-            if manifest_names_dependency(&text, name) {
+    for (manifest, rows) in TERMINAL_EVIDENCE_MANIFESTS {
+        let Some(text) = safe_read(&jsp::join(&[project_root, manifest])) else { continue };
+        for &(name, reason) in rows {
+            // One reason per dependency even when two manifests (or two
+            // module hosts) name it.
+            if manifest_names_dependency(manifest, &text, name) && !evidence.iter().any(|e| e.reason == reason) {
                 evidence.push(NativeEvidence { platform: "terminal", reason });
             }
         }
@@ -633,12 +642,6 @@ mod terminal_evidence_tests {
         let f = check_native_platform_evidence(&root, None, None, None);
         assert_eq!(f.len(), 1);
         assert!(f[0].summary.contains("a textual dependency"), "{}", f[0].summary);
-
-        let root = scratch("req");
-        write(&root, "requirements.txt", "rich==13.7.0\n");
-        let f = check_native_platform_evidence(&root, None, None, None);
-        assert_eq!(f.len(), 1);
-        assert!(f[0].summary.contains("a rich dependency"), "{}", f[0].summary);
     }
 
     #[test]
@@ -683,8 +686,8 @@ mod terminal_evidence_tests {
     #[test]
     fn a_prefixed_crate_name_is_not_a_match() {
         let root = scratch("prefix");
-        write(&root, "Cargo.toml", "[dependencies]\nrichtext = \"1\"\ncrossterm-winapi = \"0.9\"\n");
-        write(&root, "requirements.txt", "richtext==1.0\ntextual-dev==1.0\n");
+        write(&root, "Cargo.toml", "[dependencies]\nratatui-macros = \"0.6\"\nratatuix = \"1\"\n");
+        write(&root, "requirements.txt", "textual-dev==1.0\ntextualize==1.0\n");
         let f = check_native_platform_evidence(&root, Some("web"), Some(WEB_PRODUCT), Some("PRODUCT.md"));
         assert!(f.is_empty(), "{:?}", f.iter().map(|x| &x.summary).collect::<Vec<_>>());
     }
@@ -725,5 +728,36 @@ mod terminal_evidence_tests {
         let f = check_native_platform_evidence(&root, Some("web"), Some(WEB_PRODUCT), Some("PRODUCT.md"));
         assert_eq!(f.len(), 1);
         assert!(f[0].fix.contains("matching terminal reference"), "{}", f[0].fix);
+    }
+
+    #[test]
+    fn rich_alone_is_not_terminal_evidence() {
+        let root = scratch("rich-req");
+        write(&root, "requirements.txt", "rich==13.7.0\n");
+        let f = check_native_platform_evidence(&root, None, None, None);
+        assert!(f.is_empty(), "{:?}", f.iter().map(|x| &x.summary).collect::<Vec<_>>());
+
+        let root = scratch("rich-pyproject");
+        write(&root, "pyproject.toml", "[project]\ndependencies = [\n  \"rich>=13\",\n]\n");
+        let f = check_native_platform_evidence(&root, None, None, None);
+        assert!(f.is_empty(), "{:?}", f.iter().map(|x| &x.summary).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn crossterm_alone_is_not_terminal_evidence() {
+        let root = scratch("crossterm");
+        write(&root, "Cargo.toml", "[dependencies]\ncrossterm = \"0.28\"\n");
+        let f = check_native_platform_evidence(&root, Some("web"), Some(WEB_PRODUCT), Some("PRODUCT.md"));
+        assert!(f.is_empty(), "{:?}", f.iter().map(|x| &x.summary).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn a_reason_found_in_two_manifests_is_listed_once() {
+        let root = scratch("textual-twice");
+        write(&root, "pyproject.toml", "[project]\ndependencies = [\n  \"textual>=0.80\",\n]\n");
+        write(&root, "requirements.txt", "textual==0.80.0\n");
+        let f = check_native_platform_evidence(&root, None, None, None);
+        assert_eq!(f.len(), 1);
+        assert_eq!(f[0].summary.matches("a textual dependency").count(), 1, "{}", f[0].summary);
     }
 }
