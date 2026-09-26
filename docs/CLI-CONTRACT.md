@@ -274,7 +274,7 @@ Optional keys added later by engines (appended after the above): `ignoreValue` (
 #### `cli/engine/node/file-system.mjs`
 
 - `SKIP_DIRS = {'node_modules','dist','build','__pycache__'}`; any directory whose name starts with `.` is skipped **except** `HIDDEN_SOURCE_DIRS = {'.vitepress','.vuepress','.storybook'}`. The root passed to `walkDir` is never name-checked (an explicit hidden dir scans).
-- Terminal platform only: `TERMINAL_SKIP_DIRS = {'target','.venv','vendor'}` is also skipped, and any directory holding `pyvenv.cfg` is also skipped (whatever its name), and `TERMINAL_EXTENSIONS = {'.rs','.go','.py','.tcss'}` is added to the scannable set. Web walks keep `SKIP_DIRS` byte-identical on every other platform.
+- Terminal platform only: `TERMINAL_SKIP_DIRS = {'target','.venv','vendor'}` and any directory holding `pyvenv.cfg` are also skipped, and `TERMINAL_EXTENSIONS = {'.rs','.go','.py','.tcss'}` is added to the scannable set. Web walks keep `SKIP_DIRS` byte-identical on every other platform.
 - `SCANNABLE_EXTENSIONS = {'.html','.htm','.css','.scss','.sass','.less','.jsx','.tsx','.js','.ts','.vue','.svelte','.astro','.blade.php'}`; `hasScannableExtension` lowercases and also matches multi-dot exts by `endsWith` (`.blade.php`).
 - `walkDir` returns files in `readdirSync` order, recursive, unreadable dirs → `[]`.
 - **There is no generated-file detection in the CLI** (`skill/scripts/lib/is-generated.mjs` is hook-side only and not imported by `cli/`).
