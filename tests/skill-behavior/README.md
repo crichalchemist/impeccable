@@ -242,15 +242,17 @@ through OpenRouter's chat-completions path (the unmerged
 `skill-behavior-openrouter` provider), so their cells are not this README's
 native-SDK cells.
 
-Result: 68 of 78 passed, the same count as the 2026-09-24 sweep on main.
-terra failed 16 (both cases) and 17; its 16 (existing project) also failed on
-a main control run before, so it is flaky. gemini-3.7-flash failed 9, 11, 16
-(both cases), and 17, exactly as on main. sonnet failed 19 (denied launcher,
-planning-only), as on main, and 19 (successful launcher control), which
-passed on a rerun of scenario 19 on this branch, so it is recorded as flake;
-sonnet's 16 (missing product context) and 17 passed this time. No scenario
-uses a `terminal` fixture, so this run shows web and native routing did not
-regress; it does not measure terminal routing.
+Result: 68 of 78 passed, the same count as the 2026-09-24 sweep on main
+(terra 16 missing-context and 17; sonnet via OpenRouter 16 missing-context,
+17, and 19 denied-launcher planning; gemini-3.7-flash 9, 11, 16 both cases,
+and 17). terra failed 16 (both cases) and 17; its 16 (existing project) also
+failed on a main control run before, so it is flaky. gemini-3.7-flash failed
+9, 11, 16 (both cases), and 17, exactly as on main. sonnet failed 19 (denied
+launcher, planning-only), as on main, and 19 (successful launcher control),
+which passed on a rerun of scenario 19 on this branch, so it is recorded as
+flake; sonnet's 16 (missing product context) and 17 passed this time. No
+scenario uses a `terminal` fixture, so this run shows web and native routing
+did not regress; it does not measure terminal routing.
 
 ## Release investigation (2026-09-07)
 

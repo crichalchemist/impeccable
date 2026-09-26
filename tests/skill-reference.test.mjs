@@ -205,10 +205,12 @@ describe('skill reference authoring contracts', () => {
         /A terminal surface is code-led too, image generation or not/,
         /`buildPath: \{ "value": "code" \}` and no toggle/,
         /on `terminal`, the tmux capture matrix from \[terminal\.md\]\(terminal\.md\)/,
-        /A terminal project runs it once here, hook or no hook/,
+        /A terminal project runs it once here, even with a hook active/,
         /`80x24\.txt`, `120x40\.txt`, and `40x24\.txt` from `tmux capture-pane -p -e -J`/,
         /on a terminal platform \[terminal\.md\]\(terminal\.md\) plus the terminal detect findings/,
         /Without image generation, under a code-led default, or on a terminal surface, each card carries a `wireframe` schematic/,
+        /a surface-scope round draws wireframes, as above/,
+        /A `config-build-path-unset` finding does not apply to it/,
       ],
       'skill/reference/visualize.md': [/a landscape frame on an 80x24 grid of monospace cells for a terminal surface/],
       'skill/reference/polish.md': [
@@ -219,7 +221,11 @@ describe('skill reference authoring contracts', () => {
       ],
       'skill/reference/layout.md': [/^- \*\*Terminal:\*\* follow the Layout & structure section of \[terminal\.md\]\(terminal\.md\)/m],
       'skill/reference/typeset.md': [/^- \*\*Terminal:\*\* follow the Typography section of \[terminal\.md\]\(terminal\.md\)/m],
-      'skill/reference/doctor.md': [/native build files or terminal dependencies/, /\[android\.md\]\(android\.md\), or \[terminal\.md\]\(terminal\.md\)/],
+      'skill/reference/doctor.md': [
+        /native build files or terminal dependencies/,
+        /\[android\.md\]\(android\.md\), or \[terminal\.md\]\(terminal\.md\)/,
+        /A `terminal` project has nothing to choose either/,
+      ],
       'skill/reference/init.md': [
         /skip native, terminal, or non-runnable projects/,
         /the platform reference above is the one thing/,
