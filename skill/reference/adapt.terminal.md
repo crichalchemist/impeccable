@@ -15,13 +15,14 @@ Decide the layout at each class and drive it from the live size, never from a li
 | Class | Width | Decision to make |
 |---|---|---|
 | Narrow | under 60 columns | Which single region survives, how the footer collapses to one line, which labels abbreviate |
+| Compact | 60 to 79 columns | Which secondary region folds away or stacks, how many footer keys still fit, and whether nested borders flatten to one level |
 | Standard | 80 to 119 columns | The designed layout; 80x24 is the floor every screen must pass |
 | Wide | 120 columns and above | What earns the extra width (a detail pane, a wider table), and what stays capped so lines remain readable |
 
-`{{scripts_path}}/impeccable detect --json --tmux <target> --tmux-sizes 80x24,120x40,40x24` captures all three classes in one run and reports what collapses below 60 columns (`tui-rt-collapse-narrow`) and what drifts on emoji or CJK (`tui-rt-width-drift`).
+`{{scripts_path}}/impeccable detect --json --tmux <target> --tmux-sizes 80x24,120x40,40x24` captures the narrow, standard, and wide classes in one run and reports what collapses below 60 columns (`tui-rt-collapse-narrow`) and what drifts on emoji or CJK (`tui-rt-width-drift`). Add a size such as `70x24` to `--tmux-sizes` when the compact class needs its own evidence.
 
 - **Restructure, do not squeeze.** Below 60 columns, hide or stack a region; do not shrink three panes to ten columns each.
-- **Cap line length.** Above 120 columns, text blocks stay near 80 to 100 cells; only tables and grids grow.
+- **Cap line length.** At 120 columns and above, text blocks stay near 80 to 100 cells; only tables and grids grow.
 - **Test a live resize.** Grow and shrink the window while the app runs; the layout must follow every event, and nothing may persist from the old size.
 
 ## Color tiers

@@ -455,6 +455,9 @@ Tests: `tests/skill-reference.test.mjs` pins the Compact row, the live guard, an
 | `setup.hasCode` is false for Go and Python projects, so routing's `document` hint stays off there | Left out |
 | A renamed Cargo dependency (`tui = { package = "ratatui", ... }`) is not evidence | Left out |
 | A virtualenv committed to git reaches detect through the git-changes path | Left out |
+| `config-build-path-unset` fires on terminal projects, which never record `buildPath` | Left out: engine follow-up (gate `check_build_path_unset` on platform); skill text tells the model to ignore it |
+| Terminal verification assumes tmux; no path when the harness has no tmux or the app cannot run in a pane | Left out |
+| `craft-floor.md` and new-work's face and color guidance stay web-first (self-hosted faces, Drenched) and load on terminal builds | Left out |
 
 ### Delivery gates
 

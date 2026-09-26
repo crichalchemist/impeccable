@@ -137,6 +137,27 @@ describe('skill reference authoring contracts', () => {
     assert.match(adapt, /truecolor/);
   });
 
+  it('classifies every terminal width from narrow to wide with no gap', () => {
+    // The engine's narrow cutoff (NARROW_COLUMNS = 60 in crates/terminal)
+    // and the adapt table must agree, and no width between 40 and 120
+    // columns may fall outside a class.
+    const adapt = readFileSync(join(ROOT, 'skill/reference/adapt.terminal.md'), 'utf-8').replace(/\r\n?/g, '\n');
+    const terminal = readFileSync(join(ROOT, 'skill/reference/terminal.md'), 'utf-8').replace(/\r\n?/g, '\n');
+    const rows = adapt.split('\n').filter((l) => /^\| (Narrow|Compact|Standard|Wide) \|/.test(l));
+    assert.deepEqual(rows.map((l) => l.split('|')[2].trim()), [
+      'under 60 columns',
+      '60 to 79 columns',
+      '80 to 119 columns',
+      '120 columns and above',
+    ]);
+    assert.match(adapt, /At 120 columns and above, text blocks stay near 80 to 100 cells/);
+    assert.doesNotMatch(adapt, /Above 120 columns/);
+    assert.doesNotMatch(adapt, /all three classes/);
+    // The matrix probes 40 columns: every capture command passes 40x24.
+    assert.match(terminal, /80x24, 120x40, and 40 columns;/);
+    assert.doesNotMatch(terminal, /about 30 columns/);
+  });
+
   it('routes terminal projects to the terminal references and keeps detect available to them', () => {
     const skill = readFileSync(join(ROOT, 'skill/SKILL.src.md'), 'utf-8').replace(/\r\n?/g, '\n');
     const routing = readFileSync(join(ROOT, 'skill/reference/routing.md'), 'utf-8').replace(/\r\n?/g, '\n');
@@ -162,5 +183,67 @@ describe('skill reference authoring contracts', () => {
 
     const generate = readFileSync(join(ROOT, 'skill/reference/generate.md'), 'utf-8');
     assert.match(generate, /on `ios` \/ `android` \/ `adaptive` \/ `terminal` projects, decline this command/);
+
+    // live.md carries the same guard as generate.md, near the top so it is
+    // read before the setup steps.
+    const liveHead = readFileSync(join(ROOT, 'skill/reference/live.md'), 'utf-8').replace(/\r\n?/g, '\n').split('\n').slice(0, 5).join('\n');
+    assert.match(liveHead, /\*\*Web only\.\*\* Live mode's browser overlay has no native or terminal equivalent/);
+    assert.match(liveHead, /on `ios` \/ `android` \/ `adaptive` \/ `terminal` projects, decline this command/);
+  });
+
+  it('gives terminal projects a branch wherever the skill splits web from native', () => {
+    // Each file that names a web case and a native case must also name the
+    // terminal case, or a terminal project falls through to the wrong one.
+    const read = (p) => readFileSync(join(ROOT, p), 'utf-8').replace(/\r\n?/g, '\n');
+    const branches = {
+      'skill/SKILL.src.md': [
+        /the shipped device classes on a native platform; the tmux capture matrix on a terminal\)/,
+        /platform guidance for a native or terminal project when applicable/,
+      ],
+      'skill/reference/new-work.md': [
+        /landscape for desktop web, and a landscape frame on an 80x24 grid of monospace cells for a terminal surface/,
+        /A terminal surface is code-led too, image generation or not/,
+        /`buildPath: \{ "value": "code" \}` and no toggle/,
+        /on `terminal`, the tmux capture matrix from \[terminal\.md\]\(terminal\.md\)/,
+        /A terminal project runs it once here, even with a hook active/,
+        /`80x24\.txt`, `120x40\.txt`, and `40x24\.txt` from `tmux capture-pane -p -e -J`/,
+        /on a terminal platform \[terminal\.md\]\(terminal\.md\) plus the terminal detect findings/,
+        /Without image generation, under a code-led default, or on a terminal surface, each card carries a `wireframe` schematic/,
+        /a surface-scope round draws wireframes, as above/,
+        /A `config-build-path-unset` finding does not apply to it/,
+      ],
+      'skill/reference/visualize.md': [/a landscape frame on an 80x24 grid of monospace cells for a terminal surface/],
+      'skill/reference/polish.md': [
+        /on `terminal`, the tmux capture matrix from \[terminal\.md\]\(terminal\.md\)'s Verifying the build section/,
+        /on terminal, the 80x24, 120x40, and 40x24 captures, a live resize/,
+        /on terminal, a first frame within 100 ms, a terminal left as found after quit and after `Ctrl-C`/,
+        /never add another detector pass beyond the one terminal run above/,
+      ],
+      'skill/reference/layout.md': [/^- \*\*Terminal:\*\* follow the Layout & structure section of \[terminal\.md\]\(terminal\.md\)/m],
+      'skill/reference/typeset.md': [/^- \*\*Terminal:\*\* follow the Typography section of \[terminal\.md\]\(terminal\.md\)/m],
+      'skill/reference/doctor.md': [
+        /native build files or terminal dependencies/,
+        /\[android\.md\]\(android\.md\), or \[terminal\.md\]\(terminal\.md\)/,
+        /A `terminal` project has nothing to choose either/,
+      ],
+      'skill/reference/init.md': [
+        /skip native, terminal, or non-runnable projects/,
+        /the platform reference above is the one thing/,
+        /the platform is not `terminal` \(a terminal surface always builds code-led/,
+      ],
+      'skill/agents/impeccable-finish-reviewer.md': [
+        /terminal: the text captures `80x24\.txt`, `120x40\.txt`, `40x24\.txt`, `no-color\.txt`, and `piped\.txt`/,
+        /On a terminal \(`terminal`\) build the packet adds `reference\/terminal\.md` and the terminal detect findings/,
+        /terminal: the three sizes plus `no-color\.txt` and `piped\.txt`/,
+        /A terminal text capture is valid when it is not empty/,
+      ],
+      'skill/agents/impeccable-asset-producer.md': [/A terminal surface is a landscape frame drawn on an 80x24 grid of monospace cells/],
+    };
+    for (const [file, patterns] of Object.entries(branches)) {
+      const text = read(file);
+      for (const pattern of patterns) assert.match(text, pattern, `${file} has no terminal branch matching ${pattern}`);
+    }
+    assert.doesNotMatch(read('skill/reference/init.md'), /the native reference above/);
+    assert.doesNotMatch(read('skill/SKILL.src.md'), /native-platform guidance/);
   });
 });
