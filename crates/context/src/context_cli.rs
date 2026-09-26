@@ -203,9 +203,14 @@ fn append_detector_fallback(parts: &mut Vec<String>, ctx: &Ctx, cwd: &str, env: 
     if is_native(ctx.platform.as_deref()) {
         return;
     }
+    let finished = if ctx.platform.as_deref() == Some("terminal") {
+        "Once the changed terminal UI is finished, run the mechanical detector over its source"
+    } else {
+        "Once the changed web UI is finished, run the mechanical detector over it"
+    };
     parts.push([
         "MANUAL_DETECTOR_REQUIRED: No automatic Impeccable design hook is active this session.".to_string(),
-        format!("Once the changed web UI is finished, run the mechanical detector over it: `{} --json <changed targets>`.", provider.verb_cmd("detect")),
+        format!("{finished}: `{} --json <changed targets>`.", provider.verb_cmd("detect")),
         "Run it once, and not earlier during concept selection.".to_string(),
     ].join(" "));
 }
