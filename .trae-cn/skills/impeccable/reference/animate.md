@@ -9,6 +9,7 @@ Use motion to explain state, relationship, and hierarchy, or to create one autho
 - **Persuade + Experience:** motion may carry the voice. Prefer one rehearsed focal sequence to repeated section reveals.
 - **Operate + Read:** motion serves feedback, state, and continuity. Keep routine transitions fast and do not make users wait through page-load choreography.
 - **Native (`ios` / `android` / `adaptive`):** follow the Motion section of [ios.md](ios.md) or [android.md](android.md), including the platform's Reduce Motion behavior. Do not apply the web tooling below.
+- **Terminal (`terminal`):** follow the Motion section of [terminal.md](terminal.md): spinners tick on work and stop, nothing animates off a TTY, the first frame lands within 100 ms, never blink. Do not apply the web tooling below.
 
 ## Find the job
 

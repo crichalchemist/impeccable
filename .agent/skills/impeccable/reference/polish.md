@@ -19,7 +19,7 @@ Fix the cause at the narrowest correct level. Ask when a binding system principl
 
 ## 2. Gather the evidence
 
-Use the feature yourself at the surface's representative sizes: desktop and mobile on the web; on a native platform (`ios` / `android` / `adaptive`), the shipped device classes on the simulator, emulator, or hardware, captured per the platform reference's Verifying the build section. Determine:
+Use the feature yourself at the surface's representative sizes: desktop and mobile on the web; on a native platform (`ios` / `android` / `adaptive`), the shipped device classes on the simulator, emulator, or hardware, captured per the platform reference's Verifying the build section; on `terminal`, the tmux capture matrix from [terminal.md](terminal.md)'s Verifying the build section (80x24, 120x40, and 40x24, plus one run with `NO_COLOR=1` and one with stdout piped through `cat`). Determine:
 
 - whether the path is functionally complete;
 - the intended quality bar and time available;
@@ -86,13 +86,13 @@ Do not perfect one corner while leaving the rest below the same quality bar.
 
 Walk the complete path again with mouse, keyboard, and touch where applicable. Check:
 
-- mobile, intermediate, and wide layouts on the web; phone and tablet size classes in both supported orientations on native;
+- mobile, intermediate, and wide layouts on the web; phone and tablet size classes in both supported orientations on native; on terminal, the 80x24, 120x40, and 40x24 captures, a live resize, and the width classes in [adapt.terminal.md](adapt.terminal.md);
 - loading, empty, error, success, disabled, long-content, and missing-content states;
 - zoom, contrast, focus, semantics, and screen-reader names;
-- console errors, layout shift, interaction latency, and image loading everywhere; supported browsers on the web; supported OS versions, runtime warnings, and dropped frames on native;
+- console errors, layout shift, interaction latency, and image loading everywhere; supported browsers on the web; supported OS versions, runtime warnings, and dropped frames on native; on terminal, a first frame within 100 ms, a terminal left as found after quit and after `Ctrl-C`, and one `.agent/skills/impeccable/scripts/impeccable detect --json <source directory> --tmux <target> --tmux-sizes 80x24,120x40,40x24` run, because the hook drops the advisory `tui-` findings by default; that run is also the scan a `MANUAL_DETECTOR_REQUIRED` directive asks for, and the source directory includes the changed targets and collects the project signals;
 - agreement with DESIGN.md, neighboring features, and the user's scope.
 
-Follow the quality guidance supplied by `impeccable context` and hooks, then run any other relevant QA commands. Context requests a manual scan only when no automatic detector is active; never add another detector pass. Fix real defects and document only narrow intentional exceptions. A clean scan does not replace visual judgment.
+Follow the quality guidance supplied by `impeccable context` and hooks, then run any other relevant QA commands. Context requests a manual scan only when no automatic detector is active; never add another detector pass beyond the one terminal run above. Fix real defects and document only narrow intentional exceptions. A clean scan does not replace visual judgment.
 
 Finish with a source diff: remove accidental churn, orphaned code, redundant values, and temporary artifacts. Ship only when the feature is functionally complete and consistently finished across the path.
 
