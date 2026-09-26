@@ -7,6 +7,7 @@ Typography carries information, hierarchy, and voice. Improve it inside the esta
 - **Persuade + Experience:** display type may carry the voice. Use decisive contrast and responsive scale when the composition benefits.
 - **Operate + Read:** stability, scanability, and measure come first. A single well-tuned family and fixed role scale are often right.
 - **Native:** follow [ios.md](ios.md) or [android.md](android.md), including platform scaling and accessibility behavior.
+- **Terminal:** follow the Typography section of [terminal.md](terminal.md): one monospace face, bold, dim, and reverse as the whole scale, widths measured in cells, no figlet banners.
 
 If typography replacement would create a new identity, route through [new-work.md](new-work.md) and update DESIGN.md. Otherwise preserve confirmed families and improve their use.
 

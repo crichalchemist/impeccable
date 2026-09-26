@@ -1,5 +1,7 @@
 Interactive live variant mode: select elements in the browser, pick a design action, and get AI-generated HTML+CSS variants hot-swapped via the dev server's HMR.
 
+**Web only.** Live mode's browser overlay has no native or terminal equivalent; on `ios` / `android` / `adaptive` / `terminal` projects, decline this command and offer `bolder` or `quieter` on the source instead.
+
 ## Prerequisites
 
 A running dev server with HMR (Vite, Next.js, Bun, etc.), OR a static HTML file open in the browser. If the dev server's default port is busy, the app is very likely ALREADY running; probe the default URL before spawning a second server.

@@ -7,6 +7,7 @@ Layout turns product priority into reading order, grouping, rhythm, and usable s
 - **Persuade + Experience:** composition may be asymmetric, fluid, or intentionally disruptive when the selected world earns it.
 - **Operate + Read:** predictable structure, stable density, and navigable linearity are affordances.
 - **Native:** follow [ios.md](ios.md) or [android.md](android.md) for navigation, insets, adaptation, and touch targets.
+- **Terminal:** follow the Layout & structure section of [terminal.md](terminal.md) for constraint layout, resize, and borders, and decide each width class in [adapt.terminal.md](adapt.terminal.md).
 
 Preserve the established visual world. A layout command changes structure inside it; identity replacement belongs to [new-work.md](new-work.md).
 
