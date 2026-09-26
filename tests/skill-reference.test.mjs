@@ -190,4 +190,36 @@ describe('skill reference authoring contracts', () => {
     assert.match(liveHead, /\*\*Web only\.\*\* Live mode's browser overlay has no native or terminal equivalent/);
     assert.match(liveHead, /on `ios` \/ `android` \/ `adaptive` \/ `terminal` projects, decline this command/);
   });
+
+  it('gives terminal projects a branch wherever the skill splits web from native', () => {
+    // Each file that names a web case and a native case must also name the
+    // terminal case, or a terminal project falls through to the wrong one.
+    const read = (p) => readFileSync(join(ROOT, p), 'utf-8').replace(/\r\n?/g, '\n');
+    const branches = {
+      'skill/SKILL.src.md': [
+        /the shipped device classes on a native platform; the tmux capture matrix on a terminal\)/,
+        /platform guidance for a native or terminal project when applicable/,
+      ],
+      'skill/reference/polish.md': [
+        /on `terminal`, the tmux capture matrix from \[terminal\.md\]\(terminal\.md\)'s Verifying the build section/,
+        /on terminal, the 80x24, 120x40, and 40x24 captures, a live resize/,
+        /on terminal, a first frame within 100 ms, a terminal left as found after quit and after `Ctrl-C`/,
+        /never add another detector pass beyond the one terminal run above/,
+      ],
+      'skill/reference/layout.md': [/^- \*\*Terminal:\*\* follow the Layout & structure section of \[terminal\.md\]\(terminal\.md\)/m],
+      'skill/reference/typeset.md': [/^- \*\*Terminal:\*\* follow the Typography section of \[terminal\.md\]\(terminal\.md\)/m],
+      'skill/reference/doctor.md': [/native build files or terminal dependencies/, /\[android\.md\]\(android\.md\), or \[terminal\.md\]\(terminal\.md\)/],
+      'skill/reference/init.md': [
+        /skip native, terminal, or non-runnable projects/,
+        /the platform reference above is the one thing/,
+        /the platform is not `terminal` \(a terminal surface always builds code-led/,
+      ],
+    };
+    for (const [file, patterns] of Object.entries(branches)) {
+      const text = read(file);
+      for (const pattern of patterns) assert.match(text, pattern, `${file} has no terminal branch matching ${pattern}`);
+    }
+    assert.doesNotMatch(read('skill/reference/init.md'), /the native reference above/);
+    assert.doesNotMatch(read('skill/SKILL.src.md'), /native-platform guidance/);
+  });
 });
