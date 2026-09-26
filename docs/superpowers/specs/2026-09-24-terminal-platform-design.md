@@ -450,6 +450,11 @@ Tests: `tests/skill-reference.test.mjs` pins the Compact row, the live guard, an
 | `tui-rt-no-key-hints` on tables and pager prompts | PR 4, item 7 |
 | `MANUAL_DETECTOR_REQUIRED` says "web UI" on terminal (found while planning) | PR 6 |
 | Four runtime rules unmeasured on real programs | Left out: needs a manual pass after PR 4 |
+| A PyPA flat package (`mypkg/__init__.py` beside `pyproject.toml`, no root `.py`) still routes to no scan target | Left out |
+| A Cargo virtual workspace with only `crates/` routes to no scan target | Left out |
+| `setup.hasCode` is false for Go and Python projects, so routing's `document` hint stays off there | Left out |
+| A renamed Cargo dependency (`tui = { package = "ratatui", ... }`) is not evidence | Left out |
+| A virtualenv committed to git reaches detect through the git-changes path | Left out |
 
 ### Delivery gates
 

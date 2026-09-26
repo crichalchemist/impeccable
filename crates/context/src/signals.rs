@@ -281,7 +281,12 @@ fn terminal_root_holds_source(cwd: &str) -> bool {
             .any(|e| e.is_file && TERMINAL_EXTENSIONS.contains(&jsp::extname(&e.name).to_lowercase().as_str()))
 }
 
-fn is_vendored_path(rel: &str) -> bool {
+/// Mirrors the vendored segments in `TERMINAL_SKIP_DIRS`
+/// (`crates/detect/src/file_system.rs`); `.venv` is already caught by the
+/// hidden-dir check in `is_vendored_path` below. Keep the two lists in step.
+const TERMINAL_VENDORED_DIRS: [&str; 2] = ["target", "vendor"];
+
+fn is_vendored_path(rel: &str, terminal: bool) -> bool {
     let segs: Vec<&str> = rel.split(|c| c == '/' || c == '\\').collect();
     let dirs = &segs[..segs.len().saturating_sub(1)];
     dirs.iter().any(|seg| {
@@ -290,6 +295,7 @@ fn is_vendored_path(rel: &str) -> bool {
             || *seg == "dist"
             || *seg == "build"
             || *seg == "__pycache__"
+            || (terminal && TERMINAL_VENDORED_DIRS.contains(seg))
     })
 }
 
@@ -312,7 +318,7 @@ fn scan_targets(cwd: &str, git: &Value, platform: Option<&str>) -> Value {
         let c: Vec<String> = changed
             .into_iter()
             .filter(|f| scannable(f.as_str()))
-            .filter(|f| !is_vendored_path(f))
+            .filter(|f| !is_vendored_path(f, terminal))
             .filter(|f| exists(&jsp::join(&[cwd, f])))
             .collect();
         if !c.is_empty() {
@@ -486,5 +492,25 @@ mod tests {
         let (targets, via) = targets_and_via(&scan_targets(&root, &git, None));
         assert_eq!(targets, ["src"]);
         assert_eq!(via, "source-dir");
+    }
+
+    #[test]
+    fn terminal_git_changes_drop_vendored_dirs_and_web_changes_do_not() {
+        let root = scratch("git-changes-vendored");
+        write(&root, "main.go", "package main\n");
+        write(&root, "vendor/x/v.go", "package x\n");
+        write(&root, "target/debug/v.rs", "fn v() {}\n");
+        let git = json!({ "isRepo": true, "changedFiles": ["main.go", "vendor/x/v.go", "target/debug/v.rs"] });
+        let (targets, via) = targets_and_via(&scan_targets(&root, &git, Some("terminal")));
+        assert_eq!(targets, ["main.go"]);
+        assert_eq!(via, "git-changes");
+
+        let root = scratch("git-changes-vendored-web");
+        write(&root, "src/main.js", "console.log(1);\n");
+        write(&root, "vendor/x/v.js", "console.log(2);\n");
+        let git = json!({ "isRepo": true, "changedFiles": ["src/main.js", "vendor/x/v.js"] });
+        let (targets, via) = targets_and_via(&scan_targets(&root, &git, None));
+        assert_eq!(targets, ["src/main.js", "vendor/x/v.js"]);
+        assert_eq!(via, "git-changes");
     }
 }

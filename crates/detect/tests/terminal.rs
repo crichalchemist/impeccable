@@ -115,3 +115,16 @@ fn terminal_walk_adds_the_terminal_extensions_and_skips_build_dirs() {
     );
     assert_eq!(TERMINAL_SKIP_DIRS, &["target", ".venv", "vendor"]);
 }
+
+#[test]
+fn terminal_walk_skips_a_virtualenv_whatever_its_name() {
+    let dir = std::env::temp_dir().join(format!("impeccable-terminal-walk-venv-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    for rel in ["app.py", "venv/pyvenv.cfg", "venv/lib/site.py"] {
+        let p = dir.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(&p, "").unwrap();
+    }
+    let root = dir.to_string_lossy().into_owned();
+    assert_eq!(names(walk_dir_reporting_for(&root, Some("terminal"), &mut |_, _| {}), &root), vec!["app.py"]);
+}
