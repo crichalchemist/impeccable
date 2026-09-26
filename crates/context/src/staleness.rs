@@ -82,7 +82,8 @@ const TERMINAL_EVIDENCE_MANIFESTS: [(&str, &[(&str, &str)]); 4] = [
 fn manifest_names_dependency(manifest: &str, text: &str, name: &str) -> bool {
     match manifest {
         "go.mod" => go_mod_requires(text, name),
-        _ => line_names_dependency(text, name),
+        "Cargo.toml" => line_names_dependency(text, name),
+        _ => python_names_dependency(text, name),
     }
 }
 
@@ -137,6 +138,55 @@ fn go_entry_names(entry: &str, name: &str) -> bool {
             .map_or(false, |digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())),
         None => false,
     })
+}
+
+/// pyproject.toml and requirements.txt: after stripping a `#` comment, the
+/// line itself (a requirements line, or a Poetry `textual = "^0.80"` key) and
+/// every quoted string on it (a PEP 621 array such as
+/// `dependencies = ["Textual>=0.80", "rich"]`) are read as requirements.
+fn python_names_dependency(text: &str, name: &str) -> bool {
+    text.lines().any(|line| {
+        let line = line.split('#').next().unwrap_or("");
+        python_requirement_names(line, name)
+            || line.split(['"', '\'']).skip(1).step_by(2).any(|s| python_requirement_names(s, name))
+    })
+}
+
+/// A requirement names the package `name` (already normalized) when its
+/// leading name run, PEP 503 normalized, equals it and what follows is a
+/// requirement tail: nothing, extras `[`, a version `( < > = ! ~`, a marker
+/// `;`, or a URL `@`. `=` also admits a Poetry key. Prose such as
+/// "Textual app for notes" fails the tail check. Accepted residuals:
+/// `keywords = ["textual"]` and a project named `textual` still match.
+fn python_requirement_names(spec: &str, name: &str) -> bool {
+    let spec = spec.trim_start();
+    if !spec.starts_with(|c: char| c.is_ascii_alphanumeric()) {
+        return false;
+    }
+    let end = spec
+        .find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')))
+        .unwrap_or(spec.len());
+    if pep503_normalize(&spec[..end]) != name {
+        return false;
+    }
+    let tail = spec[end..].trim_start();
+    tail.is_empty() || tail.starts_with(['[', '(', '<', '>', '=', '!', '~', ';', '@'])
+}
+
+/// PEP 503 name normalization: lowercase, each run of `-`, `_`, `.` becomes
+/// one `-`.
+fn pep503_normalize(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    for c in name.chars() {
+        if matches!(c, '-' | '_' | '.') {
+            if !out.ends_with('-') {
+                out.push('-');
+            }
+        } else {
+            out.push(c.to_ascii_lowercase());
+        }
+    }
+    out
 }
 
 /// The PR 1 line-prefix scanner. Tasks 3 to 5 of the PR 6 plan replace it
@@ -657,7 +707,7 @@ pub static _UNUSED: Lazy<()> = Lazy::new(|| ());
 
 #[cfg(test)]
 mod terminal_evidence_tests {
-    use super::check_native_platform_evidence;
+    use super::{check_native_platform_evidence, pep503_normalize};
 
     fn scratch(name: &str) -> String {
         let base = std::env::temp_dir().join(format!("impeccable-terminal-evidence-{}-{}", name, std::process::id()));
@@ -853,5 +903,48 @@ mod terminal_evidence_tests {
         let f = check_native_platform_evidence(&root, None, None, None);
         assert_eq!(f.len(), 1);
         assert_eq!(f[0].summary.matches("a textual dependency").count(), 1, "{}", f[0].summary);
+    }
+
+    #[test]
+    fn pep503_folds_case_and_separator_runs() {
+        assert_eq!(pep503_normalize("Textual"), "textual");
+        assert_eq!(pep503_normalize("Textual__Dev.-Tools"), "textual-dev-tools");
+    }
+
+    #[test]
+    fn pyproject_inline_array_and_capitalized_names_count() {
+        let root = scratch("py-inline");
+        write(&root, "pyproject.toml", "[project]\nname = \"notes\"\ndependencies = [\"Textual>=0.80\", \"rich\"]\n");
+        let f = check_native_platform_evidence(&root, None, None, None);
+        assert_eq!(f.len(), 1);
+        assert!(f[0].summary.contains("carries a textual dependency."), "{}", f[0].summary);
+
+        let root = scratch("req-extras");
+        write(&root, "requirements.txt", "-r base.txt\nTextual[syntax] >= 0.80 ; python_version >= \"3.9\"\n");
+        let f = check_native_platform_evidence(&root, None, None, None);
+        assert_eq!(f.len(), 1);
+        assert!(f[0].summary.contains("a textual dependency"), "{}", f[0].summary);
+    }
+
+    #[test]
+    fn poetry_key_form_still_counts() {
+        let root = scratch("poetry");
+        write(&root, "pyproject.toml", "[tool.poetry.dependencies]\npython = \"^3.11\"\nTextual = \"^0.80\"\n");
+        let f = check_native_platform_evidence(&root, None, None, None);
+        assert_eq!(f.len(), 1);
+        assert!(f[0].summary.contains("a textual dependency"), "{}", f[0].summary);
+    }
+
+    #[test]
+    fn prose_and_comments_naming_textual_are_not_dependencies() {
+        let root = scratch("py-prose");
+        write(
+            &root,
+            "pyproject.toml",
+            "[project]\nname = \"notes\"\ndescription = \"Textual app for managing notes\"\ndependencies = [\"httpx>=0.27\"]  # textual>=0.80 later\n",
+        );
+        write(&root, "requirements.txt", "# textual==0.80.0\nhttpx==0.27.0\n");
+        let f = check_native_platform_evidence(&root, None, None, None);
+        assert!(f.is_empty(), "{:?}", f.iter().map(|x| &x.summary).collect::<Vec<_>>());
     }
 }
